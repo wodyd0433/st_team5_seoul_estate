@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Seoul Newlywed Housing Recommendation Dashboard
 
 Streamlit dashboard for recommending Seoul residential districts for newlyweds based on budget, commute, safety, and local infrastructure.
@@ -88,3 +89,6 @@ Do not upload:
 - `data_all/`
 - `.venv/`
 - log files
+=======
+# st_team5_seoul_estate
+>>>>>>> be111cef0d146aa8e95a314ad23e3ff9d3c1c447
