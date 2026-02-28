@@ -7,12 +7,22 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from src.config import COMMUTE_ZONE_PATHS, DATASET_PATHS, ENCODING_CANDIDATES, POLICE_STATION_TO_GU, RAW_CACHE_TTL
+from src.config import (
+    COMMUTE_ZONE_PATHS,
+    DATASET_PATHS,
+    DATA_DIR,
+    DATA_DIR_CANDIDATES,
+    ENCODING_CANDIDATES,
+    POLICE_STATION_TO_GU,
+    RAW_CACHE_TTL,
+)
 from src.gu_standardizer import add_standard_gu, gu_match_report
 from src.unit_detection import candidate_price_columns, standardize_price_columns
 
 
 def _read_csv_with_fallback(path: Path, **kwargs) -> pd.DataFrame:
+    if not path.exists():
+        raise FileNotFoundError(f"파일을 찾을 수 없습니다: {path}")
     last_error: Exception | None = None
     for encoding in ENCODING_CANDIDATES:
         try:
@@ -20,6 +30,27 @@ def _read_csv_with_fallback(path: Path, **kwargs) -> pd.DataFrame:
         except Exception as exc:
             last_error = exc
     raise RuntimeError(f"{path.name} 로딩 실패: {last_error}")
+
+
+def get_missing_dataset_report() -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for dataset_name, path in DATASET_PATHS.items():
+        if not path.exists():
+            rows.append({"dataset": dataset_name, "expected_path": str(path)})
+    for hub_name, path in COMMUTE_ZONE_PATHS.items():
+        if not path.exists():
+            rows.append({"dataset": f"commute_{hub_name}", "expected_path": str(path)})
+    return rows
+
+
+def build_data_setup_message() -> str:
+    search_roots = "\n".join(f"- `{candidate}`" for candidate in DATA_DIR_CANDIDATES)
+    return (
+        "필수 데이터 파일을 찾을 수 없습니다.\n\n"
+        f"현재 탐색 중인 데이터 폴더: `{DATA_DIR}`\n\n"
+        "다음 위치 중 하나에 `data_all` 폴더를 두거나 `DATA_DIR` 환경변수를 설정해야 합니다.\n"
+        f"{search_roots}"
+    )
 
 
 def _load_redevelopment(path: Path) -> pd.DataFrame:
@@ -33,6 +64,8 @@ def _load_redevelopment(path: Path) -> pd.DataFrame:
 
 
 def _load_police(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        raise FileNotFoundError(f"파일을 찾을 수 없습니다: {path}")
     for encoding in ["cp949", "euc-kr", "utf-8-sig", "utf-8"]:
         try:
             return pd.read_csv(path, encoding=encoding)
@@ -126,6 +159,13 @@ def _fit_commute_models(frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
 
 @st.cache_data(ttl=RAW_CACHE_TTL, show_spinner=False)
 def load_dataset_bundle() -> dict[str, object]:
+    missing_files = get_missing_dataset_report()
+    if missing_files:
+        missing_text = "\n".join(f"- {row['dataset']}: `{row['expected_path']}`" for row in missing_files[:12])
+        if len(missing_files) > 12:
+            missing_text += f"\n- 외 {len(missing_files) - 12}개"
+        raise RuntimeError(f"{build_data_setup_message()}\n\n누락 파일:\n{missing_text}")
+
     rent = _read_csv_with_fallback(
         DATASET_PATHS["apt_rent"],
         usecols=["구", "구코드", "년월", "전용면적_m2", "보증금_만원", "월세_만원", "계약일", "건축년도"],

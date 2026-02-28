@@ -1,7 +1,6 @@
-<<<<<<< HEAD
 # Seoul Newlywed Housing Recommendation Dashboard
 
-Streamlit dashboard for recommending Seoul residential districts for newlyweds based on budget, commute, safety, and local infrastructure.
+서울 신혼부부 전월세 입지 추천을 위한 Streamlit 대시보드입니다. 예산, 통근, 치안, 인프라를 종합해 자치구 추천 결과를 제공합니다.
 
 ## Run
 
@@ -12,9 +11,9 @@ streamlit run app.py
 
 ## Repository Scope
 
-This repository is intended to store application code only.
+이 저장소는 기본적으로 애플리케이션 코드 중심으로 관리합니다.
 
-Included:
+포함 권장:
 
 - `app.py`
 - `src/`
@@ -22,33 +21,29 @@ Included:
 - `README.md`
 - `.gitignore`
 
-Excluded:
+## Data Setup
 
-- raw datasets
-- local output files
-- logs
-- virtual environments
+앱은 아래 순서로 데이터 폴더를 탐색합니다.
 
-## Data Location
+1. `DATA_DIR` 환경변수
+2. `gpt_analysis/data_all/`
+3. 상위 폴더의 `data_all/`
 
-Raw data files are not included in this repository because of size limits.
+즉 Streamlit Cloud에 배포할 때는 아래 두 방식 중 하나를 쓰면 됩니다.
 
-Place the required files in the sibling directory:
-
-```text
-../data_all/
-```
-
-Expected structure:
+### Option 1. 저장소 내부에 data_all 포함
 
 ```text
-project_root/
-├── data_all/
-└── gpt_analysis/
-    ├── app.py
-    ├── requirements.txt
-    └── src/
+gpt_analysis/
+├── app.py
+├── requirements.txt
+├── src/
+└── data_all/
 ```
+
+### Option 2. 환경변수로 데이터 경로 지정
+
+`DATA_DIR` 를 실제 데이터 폴더 경로로 설정합니다.
 
 ## Main Data Files
 
@@ -72,23 +67,3 @@ project_root/
 - `gangnam_time_zones_20260227.csv`
 - `seongsu_time_zones_20260227.csv`
 - `yeouido_time_zones_20260224.csv`
-
-## GitHub Upload Recommendation
-
-Upload only:
-
-- `app.py`
-- `requirements.txt`
-- `README.md`
-- `.gitignore`
-- `src/`
-
-Do not upload:
-
-- `outputs/`
-- `data_all/`
-- `.venv/`
-- log files
-=======
-# st_team5_seoul_estate
->>>>>>> be111cef0d146aa8e95a314ad23e3ff9d3c1c447

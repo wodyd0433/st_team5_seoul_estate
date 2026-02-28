@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from src.config import WORKPLACE_HUBS
+from src.config import DATA_DIR, DATA_DIR_CANDIDATES, WORKPLACE_HUBS
 from src.feature_engineering import build_feature_table
 from src.io_utils import load_dataset_bundle
 from src.scoring_engine import prepare_commute_frame, score_recommendations
@@ -93,7 +93,22 @@ def main() -> None:
             """
         )
 
-    bundle = load_dataset_bundle()
+    try:
+        bundle = load_dataset_bundle()
+    except Exception as exc:
+        st.error("데이터 파일을 불러오지 못했습니다.")
+        st.markdown(
+            "\n".join(
+                [
+                    f"- 현재 데이터 폴더: `{DATA_DIR}`",
+                    "- 우선 탐색 경로:",
+                    *[f"  - `{candidate}`" for candidate in DATA_DIR_CANDIDATES],
+                    "- Streamlit Cloud에서는 저장소 내부 `data_all/` 또는 `DATA_DIR` 환경변수가 필요합니다.",
+                ]
+            )
+        )
+        st.code(str(exc))
+        st.stop()
 
     selected_year = 2025
     household_type = st.sidebar.selectbox("가구 유형", ["1인", "2인(맞벌이)"], index=1)

@@ -1,11 +1,40 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 PROJECT_ROOT = BASE_DIR.parent
-DATA_DIR = PROJECT_ROOT / "data_all"
+
+
+def resolve_data_dir() -> Path:
+    env_dir = os.getenv("DATA_DIR")
+    candidates = []
+    if env_dir:
+        candidates.append(Path(env_dir).expanduser())
+    candidates.extend(
+        [
+            BASE_DIR / "data_all",
+            PROJECT_ROOT / "data_all",
+        ]
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0] if candidates else BASE_DIR / "data_all"
+
+
+DATA_DIR = resolve_data_dir()
+DATA_DIR_CANDIDATES = [
+    path
+    for path in [
+        os.getenv("DATA_DIR"),
+        str(BASE_DIR / "data_all"),
+        str(PROJECT_ROOT / "data_all"),
+    ]
+    if path
+]
 
 DATASET_PATHS = {
     "apt_deal": DATA_DIR / "apt_deal_total.csv",
