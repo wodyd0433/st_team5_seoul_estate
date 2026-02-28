@@ -109,6 +109,8 @@ def main() -> None:
         )
         st.code(str(exc))
         st.stop()
+    if bundle.get("data_mode") == "compact":
+        st.caption("현재 배포용 경량 데이터 모드로 실행 중입니다. 원본 행 단위 탐색 대신 자치구·연도·평수버킷 집계값을 사용합니다.")
 
     selected_year = 2025
     household_type = st.sidebar.selectbox("가구 유형", ["1인", "2인(맞벌이)"], index=1)

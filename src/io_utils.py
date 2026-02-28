@@ -8,10 +8,12 @@ import pandas as pd
 import streamlit as st
 
 from src.config import (
+    COMPACT_DATA_PATHS,
     COMMUTE_ZONE_PATHS,
     DATASET_PATHS,
     DATA_DIR,
     DATA_DIR_CANDIDATES,
+    DEPLOY_DATA_DIR,
     ENCODING_CANDIDATES,
     POLICE_STATION_TO_GU,
     RAW_CACHE_TTL,
@@ -51,6 +53,29 @@ def build_data_setup_message() -> str:
         "다음 위치 중 하나에 `data_all` 폴더를 두거나 `DATA_DIR` 환경변수를 설정해야 합니다.\n"
         f"{search_roots}"
     )
+
+
+def compact_data_available() -> bool:
+    return all(path.exists() for path in COMPACT_DATA_PATHS.values())
+
+
+def _load_compact_bundle() -> dict[str, object]:
+    housing = _read_csv_with_fallback(COMPACT_DATA_PATHS["housing"])
+    district_metrics = _read_csv_with_fallback(COMPACT_DATA_PATHS["district_metrics"])
+    commute_models = _read_csv_with_fallback(COMPACT_DATA_PATHS["commute_models"])
+    return {
+        "compact_feature_base": housing,
+        "compact_district_metrics": district_metrics,
+        "commute_models": commute_models,
+        "raw_frames": {
+            "compact_housing": housing,
+            "compact_district_metrics": district_metrics,
+            "commute_models": commute_models,
+        },
+        "unit_report": pd.DataFrame(),
+        "is_compact": True,
+        "data_mode": "compact",
+    }
 
 
 def _load_redevelopment(path: Path) -> pd.DataFrame:
@@ -161,10 +186,17 @@ def _fit_commute_models(frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
 def load_dataset_bundle() -> dict[str, object]:
     missing_files = get_missing_dataset_report()
     if missing_files:
+        if compact_data_available():
+            return _load_compact_bundle()
         missing_text = "\n".join(f"- {row['dataset']}: `{row['expected_path']}`" for row in missing_files[:12])
         if len(missing_files) > 12:
             missing_text += f"\n- 외 {len(missing_files) - 12}개"
-        raise RuntimeError(f"{build_data_setup_message()}\n\n누락 파일:\n{missing_text}")
+        compact_text = "\n".join(f"- `{path}`" for path in COMPACT_DATA_PATHS.values())
+        raise RuntimeError(
+            f"{build_data_setup_message()}\n\n"
+            f"누락 파일:\n{missing_text}\n\n"
+            f"배포용 경량 데이터가 있다면 아래 파일을 `{DEPLOY_DATA_DIR}` 에 두면 됩니다.\n{compact_text}"
+        )
 
     rent = _read_csv_with_fallback(
         DATASET_PATHS["apt_rent"],
@@ -265,6 +297,8 @@ def load_dataset_bundle() -> dict[str, object]:
             + [{"dataset": "apt_deal", **row} for row in sale_unit_report]
             + year_unit_reports
         ),
+        "is_compact": False,
+        "data_mode": "raw",
     }
 
 

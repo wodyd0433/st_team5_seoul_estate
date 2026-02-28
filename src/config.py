@@ -6,6 +6,7 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 PROJECT_ROOT = BASE_DIR.parent
+DEPLOY_DATA_DIR = BASE_DIR / "deploy_data"
 
 
 def resolve_data_dir() -> Path:
@@ -35,6 +36,12 @@ DATA_DIR_CANDIDATES = [
     ]
     if path
 ]
+
+COMPACT_DATA_PATHS = {
+    "housing": DEPLOY_DATA_DIR / "compact_housing.csv",
+    "district_metrics": DEPLOY_DATA_DIR / "compact_district_metrics.csv",
+    "commute_models": DEPLOY_DATA_DIR / "commute_models.csv",
+}
 
 DATASET_PATHS = {
     "apt_deal": DATA_DIR / "apt_deal_total.csv",

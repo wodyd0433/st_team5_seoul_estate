@@ -148,6 +148,94 @@ def _aggregate_redevelopment(bundle: dict[str, object]) -> pd.DataFrame:
     return pd.DataFrame({"gu": SEOUL_GUS}).merge(base, on="gu", how="left").fillna(0)
 
 
+def _weighted_average(values: pd.Series, weights: pd.Series) -> float:
+    numeric_values = pd.to_numeric(values, errors="coerce")
+    numeric_weights = pd.to_numeric(weights, errors="coerce").fillna(0)
+    mask = numeric_values.notna() & numeric_weights.gt(0)
+    if not mask.any():
+        return float(numeric_values.dropna().median()) if numeric_values.notna().any() else np.nan
+    return float(np.average(numeric_values.loc[mask], weights=numeric_weights.loc[mask]))
+
+
+def _build_feature_table_from_compact(
+    bundle: dict[str, object],
+    year: int,
+    budget_cap: int,
+    monthly_budget_cap: int,
+    min_area_pyeong: int,
+    max_area_pyeong: int,
+) -> tuple[pd.DataFrame, dict[str, float]]:
+    housing = bundle["compact_feature_base"].copy()
+    district_metrics = bundle["compact_district_metrics"].copy()
+    housing["year"] = pd.to_numeric(housing["year"], errors="coerce")
+    housing["area_pyeong_bucket"] = pd.to_numeric(housing["area_pyeong_bucket"], errors="coerce")
+    filtered = housing.loc[
+        housing["year"].eq(year)
+        & housing["area_pyeong_bucket"].between(min_area_pyeong, max_area_pyeong, inclusive="both")
+    ].copy()
+    if filtered.empty:
+        fallback = housing.loc[housing["year"].eq(year)].copy()
+        if fallback.empty:
+            fallback = housing.copy()
+        fallback["range_gap"] = (
+            (fallback["area_pyeong_bucket"] - min_area_pyeong).abs()
+            + (fallback["area_pyeong_bucket"] - max_area_pyeong).abs()
+        )
+        filtered = fallback.sort_values(["gu", "range_gap"]).groupby("gu", as_index=False).head(3).copy()
+
+    def _summarize_group(group: pd.DataFrame) -> pd.Series:
+        rent_weight = group["rent_txn_count"].fillna(0)
+        sale_weight = group["sale_txn_count"].fillna(0)
+        return pd.Series(
+            {
+                "deposit_price_krw": _weighted_average(group["deposit_price_krw"], rent_weight),
+                "monthly_rent_krw": _weighted_average(group["monthly_rent_krw"], rent_weight),
+                "monthly_rent_active_krw": _weighted_average(group["monthly_rent_active_krw"], rent_weight),
+                "monthly_rent_positive_ratio": _weighted_average(group["monthly_rent_positive_ratio"], rent_weight),
+                "rent_area_m2": _weighted_average(group["rent_area_m2"], rent_weight),
+                "rent_build_year": _weighted_average(group["rent_build_year"], rent_weight),
+                "rent_txn_count": rent_weight.sum(),
+                "sale_price_krw": _weighted_average(group["sale_price_krw"], sale_weight),
+                "sale_area_m2": _weighted_average(group["sale_area_m2"], sale_weight),
+                "sale_build_year": _weighted_average(group["sale_build_year"], sale_weight),
+                "sale_txn_count": sale_weight.sum(),
+            }
+        )
+
+    housing_summary = filtered.groupby("gu", dropna=False).apply(_summarize_group, include_groups=False).reset_index()
+    feature = pd.DataFrame({"gu": SEOUL_GUS}).merge(housing_summary, on="gu", how="left").merge(
+        district_metrics,
+        on="gu",
+        how="left",
+    )
+    feature["year"] = year
+    feature["budget_fit"] = ((feature["deposit_price_krw"].fillna(feature["deposit_price_krw"].median()) <= budget_cap)).astype(int)
+    feature["monthly_budget_fit"] = (
+        feature["monthly_rent_active_krw"].fillna(feature["monthly_rent_active_krw"].median()).fillna(0).le(monthly_budget_cap).astype(int)
+    )
+    feature["housing_budget_fit"] = ((feature["budget_fit"] + feature["monthly_budget_fit"]) >= 2).astype(int)
+    feature["price_burden_index"] = feature["deposit_price_krw"].fillna(feature["deposit_price_krw"].median()) / max(budget_cap, 1)
+    feature["monthly_burden_index"] = (
+        feature["monthly_rent_active_krw"].fillna(feature["monthly_rent_active_krw"].median()).fillna(0) / max(monthly_budget_cap, 1)
+    )
+    feature["infra_score_raw"] = (
+        feature["hospital_count"].fillna(0)
+        + feature["park_count"].fillna(0)
+        + feature["hospital_points"].fillna(0) / 10
+        + feature["retail_license_count"].fillna(0) / 10
+    )
+    feature["safety_score_raw"] = feature["police_satisfaction_score"].fillna(0) - feature["crime_score_proxy"].fillna(0) / 10
+    feature["redevelopment_score_raw"] = feature["redevelopment_count"].fillna(0) + feature["active_stage_count"].fillna(0) / 5
+    feature["sale_rent_gap_krw"] = feature["sale_price_krw"] - feature["deposit_price_krw"]
+    feature["age_proxy"] = year - feature["rent_build_year"].fillna(feature["sale_build_year"]).fillna(year)
+    feature["selected_area_min_pyeong"] = min_area_pyeong
+    feature["selected_area_max_pyeong"] = max_area_pyeong
+    feature["selected_area_min_m2"] = round(min_area_pyeong * 3.3058, 1)
+    feature["selected_area_max_m2"] = round(max_area_pyeong * 3.3058, 1)
+    feature = feature.sort_values(["housing_budget_fit", "infra_score_raw"], ascending=[False, False]).reset_index(drop=True)
+    return feature, {"memory_mb": round(feature.memory_usage(deep=True).sum() / 1024 / 1024, 2), "data_mode": "compact"}
+
+
 @st.cache_data(ttl=FEATURE_CACHE_TTL, show_spinner=False)
 def build_feature_table(
     bundle: dict[str, object],
@@ -159,6 +247,16 @@ def build_feature_table(
     min_area_pyeong: int = 18,
     max_area_pyeong: int = 22,
 ) -> tuple[pd.DataFrame, dict[str, float]]:
+    if bundle.get("is_compact"):
+        return _build_feature_table_from_compact(
+            bundle=bundle,
+            year=year,
+            budget_cap=budget_cap,
+            monthly_budget_cap=monthly_budget_cap,
+            min_area_pyeong=min_area_pyeong,
+            max_area_pyeong=max_area_pyeong,
+        )
+
     rent = bundle["rent"].copy()
     sale = bundle["sale"].copy()
     if sampling_rate < 1.0:

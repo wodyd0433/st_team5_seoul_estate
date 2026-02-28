@@ -40,22 +40,40 @@ def build_visualization_gallery(
     selected_year: int,
 ) -> dict[str, go.Figure]:
     figs: dict[str, go.Figure] = {}
-    rent = bundle["rent"].copy()
-    rent["year"] = rent["년월"].astype(str).str[:4].astype(int)
-    sale = bundle["sale"].copy()
-
-    rent_trend = rent.groupby(["year", "gu"])["보증금_만원_krw"].median().reset_index()
-    sale_trend = sale.groupby(["dealYear", "gu"])["dealAmount_krw"].median().reset_index().rename(columns={"dealYear": "year"})
+    if bundle.get("is_compact"):
+        area_min = int(feature_table["selected_area_min_pyeong"].iloc[0])
+        area_max = int(feature_table["selected_area_max_pyeong"].iloc[0])
+        compact = bundle["compact_feature_base"].copy()
+        compact["year"] = pd.to_numeric(compact["year"], errors="coerce")
+        compact["area_pyeong_bucket"] = pd.to_numeric(compact["area_pyeong_bucket"], errors="coerce")
+        compact = compact.loc[compact["area_pyeong_bucket"].between(area_min, area_max, inclusive="both")].copy()
+        rent_trend = compact.groupby(["year", "gu"])["deposit_price_krw"].mean().reset_index()
+        sale_trend = compact.groupby(["year", "gu"])["sale_price_krw"].mean().reset_index()
+        current_compact = compact.loc[compact["year"].eq(selected_year)].copy()
+        current_compact["display_area_m2"] = current_compact["area_pyeong_bucket"] * 3.3058
+    else:
+        rent = bundle["rent"].copy()
+        rent["year"] = rent["년월"].astype(str).str[:4].astype(int)
+        sale = bundle["sale"].copy()
+        rent_trend = rent.groupby(["year", "gu"])["보증금_만원_krw"].median().reset_index()
+        sale_trend = sale.groupby(["dealYear", "gu"])["dealAmount_krw"].median().reset_index().rename(columns={"dealYear": "year"})
     gap = feature_table[["gu", "sale_rent_gap_krw"]].sort_values("sale_rent_gap_krw", ascending=False)
     rank = recommendations[["gu", "score_rank", "total_score"]].copy()
 
-    figs["rent_trend_line"] = px.line(rent_trend, x="year", y="보증금_만원_krw", color="gu", title="자치구별 전세보증금 추세")
-    figs["sale_trend_line"] = px.line(sale_trend, x="year", y="dealAmount_krw", color="gu", title="자치구별 매매가 추세")
+    rent_trend_y = "deposit_price_krw" if "deposit_price_krw" in rent_trend.columns else "보증금_만원_krw"
+    sale_trend_y = "sale_price_krw" if "sale_price_krw" in sale_trend.columns else "dealAmount_krw"
+    figs["rent_trend_line"] = px.line(rent_trend, x="year", y=rent_trend_y, color="gu", title="자치구별 전세보증금 추세")
+    figs["sale_trend_line"] = px.line(sale_trend, x="year", y=sale_trend_y, color="gu", title="자치구별 매매가 추세")
     figs["rent_sale_gap"] = px.bar(gap, x="gu", y="sale_rent_gap_krw", title="매매-전세 격차")
-    figs["price_box"] = px.box(rent.query("year == @selected_year"), x="gu", y="보증금_만원_krw", title="전세보증금 분포")
-    figs["area_price_scatter"] = px.scatter(rent.query("year == @selected_year"), x="전용면적_m2", y="보증금_만원_krw", color="gu", title="면적 대비 전세보증금")
+    if bundle.get("is_compact"):
+        figs["price_box"] = px.bar(current_compact, x="gu", y="deposit_price_krw", title="전세보증금 수준")
+        figs["area_price_scatter"] = px.scatter(current_compact, x="display_area_m2", y="deposit_price_krw", color="gu", title="면적 대비 전세보증금")
+        figs["price_density"] = px.histogram(current_compact, x="deposit_price_krw", nbins=20, color="gu", title="전세보증금 분포")
+    else:
+        figs["price_box"] = px.box(rent.query("year == @selected_year"), x="gu", y="보증금_만원_krw", title="전세보증금 분포")
+        figs["area_price_scatter"] = px.scatter(rent.query("year == @selected_year"), x="전용면적_m2", y="보증금_만원_krw", color="gu", title="면적 대비 전세보증금")
+        figs["price_density"] = px.histogram(rent.query("year == @selected_year"), x="보증금_만원_krw", nbins=30, color="gu", title="전세보증금 밀도")
     figs["yearly_rank_change"] = px.scatter(rank, x="score_rank", y="total_score", text="gu", size="total_score", title="자치구 랭킹 변동 차트")
-    figs["price_density"] = px.histogram(rent.query("year == @selected_year"), x="보증금_만원_krw", nbins=30, color="gu", title="전세보증금 밀도")
     figs["infra_bar"] = px.bar(feature_table, x="gu", y=["hospital_count", "park_count", "retail_license_count"], barmode="group", title="인프라 현황")
     figs["safety_bar"] = px.bar(feature_table, x="gu", y=["crime_score_proxy", "police_satisfaction_score"], barmode="group", title="치안 비교")
     figs["corr_heatmap"] = px.imshow(feature_table.select_dtypes(include="number").corr().round(2), text_auto=True, title="상관관계 히트맵")
