@@ -133,8 +133,14 @@ def score_recommendations(
         frame["price_score"] = frame["deposit_score"] * 0.45 + frame["monthly_score"] * 0.55
     else:
         frame["price_score"] = frame["deposit_score"] * 0.6 + frame["monthly_score"] * 0.4
-    frame["infra_score"] = _scale(frame["infra_score_raw"], scaling_method)
-    frame["safety_score"] = _scale(frame["safety_score_raw"], scaling_method)
+    zero_series = pd.Series(0, index=frame.index, dtype="float64")
+    hospital_component = _scale(frame["hospital_count"] if "hospital_count" in frame.columns else zero_series, scaling_method)
+    park_component = _scale(frame["park_count"] if "park_count" in frame.columns else zero_series, scaling_method)
+    mart_component = _scale(frame["mart_count"] if "mart_count" in frame.columns else zero_series, scaling_method)
+    frame["infra_score"] = hospital_component * 0.4 + park_component * 0.3 + mart_component * 0.3
+    crime_component = _scale(frame["crime_total_count"] if "crime_total_count" in frame.columns else zero_series, scaling_method, reverse=True)
+    police_component = _scale(frame["police_satisfaction_score"] if "police_satisfaction_score" in frame.columns else zero_series, scaling_method)
+    frame["safety_score"] = crime_component * 0.55 + police_component * 0.45
     frame["redevelopment_score"] = _scale(frame["redevelopment_score_raw"], scaling_method)
 
     commute_available = frame["commute_minutes"].notna().sum() > 0

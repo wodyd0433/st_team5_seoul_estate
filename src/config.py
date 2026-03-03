@@ -7,6 +7,21 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 PROJECT_ROOT = BASE_DIR.parent
 DEPLOY_DATA_DIR = BASE_DIR / "deploy_data"
+REQUIRED_DATA_FILENAMES = {
+    "apt_deal_total.csv",
+    "seoul_apt_rent_5y.csv",
+    "crime_2024.csv",
+    "police_satisfaction_2025.csv",
+    "hospital.db",
+}
+
+
+def _candidate_score(path: Path) -> tuple[int, int]:
+    if not path.exists():
+        return (-1, -1)
+    present = sum((path / name).exists() for name in REQUIRED_DATA_FILENAMES)
+    total = len(list(path.glob("*")))
+    return (present, total)
 
 
 def resolve_data_dir() -> Path:
@@ -16,12 +31,17 @@ def resolve_data_dir() -> Path:
         candidates.append(Path(env_dir).expanduser())
     candidates.extend(
         [
-            BASE_DIR / "data_all",
             PROJECT_ROOT / "data_all",
+            BASE_DIR / "data_all",
         ]
     )
-    for candidate in candidates:
-        if candidate.exists():
+    ranked = sorted(
+        ((candidate, _candidate_score(candidate)) for candidate in candidates),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    for candidate, score in ranked:
+        if score[0] >= 0:
             return candidate
     return candidates[0] if candidates else BASE_DIR / "data_all"
 
@@ -41,6 +61,7 @@ COMPACT_DATA_PATHS = {
     "housing": DEPLOY_DATA_DIR / "compact_housing.csv",
     "district_metrics": DEPLOY_DATA_DIR / "compact_district_metrics.csv",
     "commute_models": DEPLOY_DATA_DIR / "commute_models.csv",
+    "persona_profiles": DEPLOY_DATA_DIR / "persona_profiles.csv",
 }
 
 DATASET_PATHS = {
@@ -51,15 +72,14 @@ DATASET_PATHS = {
     "rent_avg_2023": DATA_DIR / "자치구별_아파트_전월세_평균2023.csv",
     "rent_avg_2024": DATA_DIR / "자치구별_아파트_전월세_평균2024.csv",
     "rent_avg_2025": DATA_DIR / "자치구별_아파트_전월세_평균2025.csv",
-    "infra_summary": DATA_DIR / "seoul_infra_summary.csv",
-    "distribution_license": DATA_DIR / "distribution_license.csv",
     "seoul_parks": DATA_DIR / "seoul_parks.csv",
-    "seoul_parks_stats": DATA_DIR / "seoul_parks_stats.csv",
-    "hospital_data": DATA_DIR / "hospital_data.csv",
+    "seoul_mart": DATA_DIR / "seoul_mart.csv",
     "hospital_db": DATA_DIR / "hospital.db",
     "crime": DATA_DIR / "crime_2024.csv",
     "police": DATA_DIR / "police_satisfaction_2025.csv",
     "redevelopment": DATA_DIR / "25.12기준.서울시정비사업추진현황.csv",
+    "income_newlyweds": BASE_DIR / "data_all" / "DT_1NW1027.csv",
+    "debt_newlyweds": BASE_DIR / "data_all" / "debt_newlyweds.csv",
 }
 
 SEOUL_GUS = [
@@ -77,7 +97,7 @@ GU_ALIASES.update({
     "영등포구청": "영등포구",
 })
 
-ENCODING_CANDIDATES = ["utf-8", "utf-8-sig", "cp949", "euc-kr"]
+ENCODING_CANDIDATES = ["utf-8-sig", "utf-8", "cp949", "euc-kr"]
 RAW_CACHE_TTL = 3600
 FEATURE_CACHE_TTL = 3600
 SCORING_CACHE_TTL = 3600

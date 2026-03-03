@@ -19,6 +19,7 @@ from src.config import (
     RAW_CACHE_TTL,
 )
 from src.gu_standardizer import add_standard_gu, gu_match_report
+from src.persona import build_persona_profiles
 from src.unit_detection import candidate_price_columns, standardize_price_columns
 
 
@@ -27,6 +28,16 @@ def _read_csv_with_fallback(path: Path, **kwargs) -> pd.DataFrame:
         raise FileNotFoundError(f"파일을 찾을 수 없습니다: {path}")
     last_error: Exception | None = None
     for encoding in ENCODING_CANDIDATES:
+        try:
+            return pd.read_csv(path, encoding=encoding, low_memory=False, **kwargs)
+        except Exception as exc:
+            last_error = exc
+    raise RuntimeError(f"{path.name} 로딩 실패: {last_error}")
+
+
+def _read_csv_with_custom_encodings(path: Path, encodings: list[str], **kwargs) -> pd.DataFrame:
+    last_error: Exception | None = None
+    for encoding in encodings:
         try:
             return pd.read_csv(path, encoding=encoding, low_memory=False, **kwargs)
         except Exception as exc:
@@ -63,14 +74,17 @@ def _load_compact_bundle() -> dict[str, object]:
     housing = _read_csv_with_fallback(COMPACT_DATA_PATHS["housing"])
     district_metrics = _read_csv_with_fallback(COMPACT_DATA_PATHS["district_metrics"])
     commute_models = _read_csv_with_fallback(COMPACT_DATA_PATHS["commute_models"])
+    persona_profiles = _read_csv_with_fallback(COMPACT_DATA_PATHS["persona_profiles"]) if COMPACT_DATA_PATHS["persona_profiles"].exists() else pd.DataFrame()
     return {
         "compact_feature_base": housing,
         "compact_district_metrics": district_metrics,
         "commute_models": commute_models,
+        "persona_profiles": persona_profiles,
         "raw_frames": {
             "compact_housing": housing,
             "compact_district_metrics": district_metrics,
             "commute_models": commute_models,
+            **({"persona_profiles": persona_profiles} if not persona_profiles.empty else {}),
         },
         "unit_report": pd.DataFrame(),
         "is_compact": True,
@@ -89,14 +103,19 @@ def _load_redevelopment(path: Path) -> pd.DataFrame:
 
 
 def _load_police(path: Path) -> pd.DataFrame:
-    if not path.exists():
-        raise FileNotFoundError(f"파일을 찾을 수 없습니다: {path}")
-    for encoding in ["cp949", "euc-kr", "utf-8-sig", "utf-8"]:
-        try:
-            return pd.read_csv(path, encoding=encoding)
-        except Exception:
-            continue
-    raise RuntimeError(f"{path.name} 로딩 실패")
+    return _read_csv_with_fallback(path)
+
+
+def _load_hospital_frame(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+    with sqlite3.connect(path) as conn:
+        tables = pd.read_sql_query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", conn)
+        hospitals = pd.read_sql_query("SELECT * FROM hospitals", conn)
+    hospitals.columns = [str(col).strip() for col in hospitals.columns]
+    return hospitals, tables
+
+
+def _load_debt_newlyweds(path: Path) -> pd.DataFrame:
+    return _read_csv_with_custom_encodings(path, ["cp949", "euc-kr", "utf-8-sig"], header=None)
 
 
 def _reshape_crime(df: pd.DataFrame) -> pd.DataFrame:
@@ -143,6 +162,35 @@ def _reshape_redevelopment(df: pd.DataFrame) -> pd.DataFrame:
     result = result.loc[~(result.get("자치구").isna() & result.get("구역명").isna())].copy()
     result = add_standard_gu(result, ["자치구", "위치1", "위치2", "구역명"])
     return result
+
+
+def _build_park_stats(parks: pd.DataFrame) -> pd.DataFrame:
+    frame = parks.copy()
+    frame = frame.loc[frame.get("rgn").notna()].copy()
+    frame = add_standard_gu(frame, ["rgn", "park_addr"])
+    stats = frame.groupby("gu", dropna=False).size().rename("park_count").reset_index()
+    return stats
+
+
+def _build_infra_summary(hospital: pd.DataFrame, park_stats: pd.DataFrame, mart: pd.DataFrame) -> pd.DataFrame:
+    hospital_count = hospital.groupby("gu", dropna=False).size().rename("hospital_count").reset_index()
+    park_count = park_stats.rename(columns={"park_count": "park_count"})
+    mart_count = mart.groupby("gu", dropna=False).size().rename("mart_count").reset_index()
+    return (
+        hospital_count.merge(park_count, on="gu", how="outer")
+        .merge(mart_count, on="gu", how="outer")
+        .fillna(0)
+    )
+
+
+def _reshape_mart(df: pd.DataFrame) -> pd.DataFrame:
+    frame = df.copy()
+    frame = add_standard_gu(frame, ["도로명주소", "지번주소"])
+    if "상세영업상태명" in frame.columns:
+        frame = frame.loc[frame["상세영업상태명"].astype(str).str.contains("정상영업", na=False)].copy()
+    elif "영업상태명" in frame.columns:
+        frame = frame.loc[frame["영업상태명"].astype(str).str.contains("영업/정상", na=False)].copy()
+    return frame
 
 
 def _load_commute_zone_frames() -> dict[str, pd.DataFrame]:
@@ -225,14 +273,14 @@ def load_dataset_bundle() -> dict[str, object]:
             "region_name": "string",
         },
     )
-    infra = _read_csv_with_fallback(DATASET_PATHS["infra_summary"])
-    dist = _read_csv_with_fallback(DATASET_PATHS["distribution_license"])
     parks = _read_csv_with_fallback(DATASET_PATHS["seoul_parks"])
-    park_stats = _read_csv_with_fallback(DATASET_PATHS["seoul_parks_stats"])
-    hospital = _read_csv_with_fallback(DATASET_PATHS["hospital_data"])
+    mart = _reshape_mart(_read_csv_with_fallback(DATASET_PATHS["seoul_mart"]))
+    hospital, tables = _load_hospital_frame(DATASET_PATHS["hospital_db"])
     crime = _reshape_crime(_read_csv_with_fallback(DATASET_PATHS["crime"]))
     police = _reshape_police(_load_police(DATASET_PATHS["police"]))
     redevelopment = _reshape_redevelopment(_load_redevelopment(DATASET_PATHS["redevelopment"]))
+    income_newlyweds = _read_csv_with_fallback(DATASET_PATHS["income_newlyweds"])
+    debt_newlyweds = _load_debt_newlyweds(DATASET_PATHS["debt_newlyweds"])
     commute_zone_frames = _load_commute_zone_frames()
     commute_models = _fit_commute_models(commute_zone_frames)
 
@@ -242,10 +290,8 @@ def load_dataset_bundle() -> dict[str, object]:
 
     rent = add_standard_gu(rent, ["구"])
     sale = add_standard_gu(sale, ["region_name", "estateAgentSggNm"])
-    infra = add_standard_gu(infra, ["rgn"])
-    dist = add_standard_gu(dist, ["gu", "자치구", "시군구", "site_addr", "road_addr"])
-    parks = add_standard_gu(parks, ["gu", "자치구", "park_addr"])
-    park_stats = add_standard_gu(park_stats, ["rgn"])
+    parks = add_standard_gu(parks, ["rgn", "park_addr"])
+    mart = add_standard_gu(mart, ["도로명주소", "지번주소"])
     hospital = add_standard_gu(hospital, ["sgguCdNm", "addr"])
     if "gu" not in crime.columns or crime["gu"].isna().all():
         crime = add_standard_gu(crime, list(crime.columns))
@@ -254,6 +300,10 @@ def load_dataset_bundle() -> dict[str, object]:
     if "gu" not in redevelopment.columns or redevelopment["gu"].isna().all():
         redevelopment = add_standard_gu(redevelopment, ["자치구", "위치1", "위치2", "구역명"])
 
+    park_stats = _build_park_stats(parks)
+    infra = _build_infra_summary(hospital, park_stats, mart)
+    persona_profiles = build_persona_profiles(income_newlyweds, debt_newlyweds)
+
     rent, rent_unit_report = standardize_price_columns(rent, ["보증금_만원", "월세_만원"])
     sale, sale_unit_report = standardize_price_columns(sale, ["dealAmount"])
     year_unit_reports: list[dict[str, object]] = []
@@ -261,16 +311,13 @@ def load_dataset_bundle() -> dict[str, object]:
         yearly_rent[year], unit_report = standardize_price_columns(frame, candidate_price_columns(frame).values())
         year_unit_reports.extend([{**row, "dataset": f"rent_avg_{year}"} for row in unit_report])
 
-    with sqlite3.connect(DATASET_PATHS["hospital_db"]) as conn:
-        tables = pd.read_sql_query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name", conn)
-
     return {
         "rent": rent,
         "sale": sale,
         "infra": infra,
-        "distribution": dist,
         "parks": parks,
         "park_stats": park_stats,
+        "mart": mart,
         "hospital": hospital,
         "crime": crime,
         "police": police,
@@ -279,17 +326,23 @@ def load_dataset_bundle() -> dict[str, object]:
         "hospital_db_tables": tables,
         "commute_zone_frames": commute_zone_frames,
         "commute_models": commute_models,
+        "income_newlyweds": income_newlyweds,
+        "debt_newlyweds": debt_newlyweds,
+        "persona_profiles": persona_profiles,
         "raw_frames": {
             "apt_deal": sale,
             "apt_rent": rent,
             "infra_summary": infra,
-            "distribution_license": dist,
             "seoul_parks": parks,
-            "seoul_parks_stats": park_stats,
-            "hospital_data": hospital,
+            "seoul_mart": mart,
+            "park_stats": park_stats,
+            "hospital_db": hospital,
             "crime": crime,
             "police": police,
             "redevelopment": redevelopment,
+            "income_newlyweds": income_newlyweds,
+            "debt_newlyweds": debt_newlyweds,
+            "persona_profiles": persona_profiles,
             **{f"commute_{k}": v for k, v in commute_zone_frames.items()},
         },
         "unit_report": pd.DataFrame(

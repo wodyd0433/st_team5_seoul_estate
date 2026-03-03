@@ -29,6 +29,7 @@ def _prepare_rent_compact(rent: pd.DataFrame) -> pd.DataFrame:
         )
         .reset_index()
     )
+
     positive = frame.loc[frame["월세_만원_krw"].fillna(0) > 0].copy()
     positive_grouped = (
         positive.groupby(["gu", "year", "area_pyeong_bucket"], dropna=False)
@@ -61,29 +62,32 @@ def _prepare_sale_compact(sale: pd.DataFrame) -> pd.DataFrame:
 def build_deploy_data(output_dir: Path) -> None:
     bundle = load_dataset_bundle()
     if bundle.get("is_compact"):
-        raise RuntimeError("이미 경량 데이터 모드입니다. 원본 data_all 이 있는 환경에서 실행하세요.")
+        raise RuntimeError("현재 경량 데이터 모드입니다. 원본 data_all 이 있는 환경에서 실행해야 합니다.")
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
     rent_compact = _prepare_rent_compact(bundle["rent"])
     sale_compact = _prepare_sale_compact(bundle["sale"])
     district_metrics = (
-        pd.DataFrame({"gu": rent_compact["gu"].dropna().unique()})
+        pd.DataFrame({"gu": sorted(rent_compact["gu"].dropna().unique())})
         .merge(_aggregate_infra(bundle), on="gu", how="left")
         .merge(_aggregate_safety(bundle), on="gu", how="left")
         .merge(_aggregate_redevelopment(bundle), on="gu", how="left")
     )
     housing = rent_compact.merge(sale_compact, on=["gu", "year", "area_pyeong_bucket"], how="outer")
     housing = housing.sort_values(["year", "gu", "area_pyeong_bucket"]).reset_index(drop=True)
+    persona_profiles = bundle["persona_profiles"].copy()
 
     housing.to_csv(output_dir / "compact_housing.csv", index=False, encoding="utf-8-sig")
     district_metrics.to_csv(output_dir / "compact_district_metrics.csv", index=False, encoding="utf-8-sig")
     bundle["commute_models"].to_csv(output_dir / "commute_models.csv", index=False, encoding="utf-8-sig")
+    persona_profiles.to_csv(output_dir / "persona_profiles.csv", index=False, encoding="utf-8-sig")
 
     print("Deploy data generated:")
     print(output_dir / "compact_housing.csv")
     print(output_dir / "compact_district_metrics.csv")
     print(output_dir / "commute_models.csv")
+    print(output_dir / "persona_profiles.csv")
 
 
 if __name__ == "__main__":

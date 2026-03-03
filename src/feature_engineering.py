@@ -103,16 +103,16 @@ def _aggregate_yearly_rent_for_area_range(
 
 
 def _aggregate_infra(bundle: dict[str, object]) -> pd.DataFrame:
-    infra = bundle["infra"][["gu", "hospital_count", "park_count"]].copy()
+    infra = bundle["infra"][["gu", "hospital_count", "park_count", "mart_count"]].copy()
     infra["hospital_count"] = pd.to_numeric(infra["hospital_count"], errors="coerce")
     infra["park_count"] = pd.to_numeric(infra["park_count"], errors="coerce")
-    infra = infra.groupby("gu", dropna=False)[["hospital_count", "park_count"]].mean().reset_index()
+    infra["mart_count"] = pd.to_numeric(infra["mart_count"], errors="coerce")
+    infra = infra.groupby("gu", dropna=False)[["hospital_count", "park_count", "mart_count"]].mean().reset_index()
     hospital = bundle["hospital"].groupby("gu", dropna=False).size().rename("hospital_points").reset_index()
     park_stats = bundle["park_stats"].copy()
     park_stats["park_count_detail"] = pd.to_numeric(park_stats.get("park_count"), errors="coerce")
     park_stats = park_stats.groupby("gu", dropna=False)["park_count_detail"].mean().reset_index()
-    dist = bundle["distribution"].groupby("gu", dropna=False).size().rename("retail_license_count").reset_index()
-    return infra.merge(hospital, on="gu", how="outer").merge(park_stats, on="gu", how="outer").merge(dist, on="gu", how="outer")
+    return infra.merge(hospital, on="gu", how="outer").merge(park_stats, on="gu", how="outer")
 
 
 def _aggregate_safety(bundle: dict[str, object]) -> pd.DataFrame:
@@ -121,16 +121,24 @@ def _aggregate_safety(bundle: dict[str, object]) -> pd.DataFrame:
         if column != "gu":
             crime[column] = pd.to_numeric(crime[column], errors="coerce")
     crime_numeric = [col for col in crime.select_dtypes(include=["number"]).columns if col != "gu"]
-    crime_grouped = crime.groupby("gu")[crime_numeric].mean(numeric_only=True).reset_index() if crime_numeric and "gu" in crime.columns else pd.DataFrame({"gu": SEOUL_GUS})
-    crime_grouped["crime_score_proxy"] = crime_grouped.select_dtypes(include=["number"]).sum(axis=1) if not crime_grouped.empty else 0
+    if crime_numeric and "gu" in crime.columns:
+        crime_grouped = crime.groupby("gu")[crime_numeric].mean(numeric_only=True).reset_index()
+        crime_grouped["crime_total_count"] = crime_grouped[crime_numeric].sum(axis=1)
+        crime_grouped = crime_grouped[["gu", "crime_total_count"]]
+    else:
+        crime_grouped = pd.DataFrame({"gu": SEOUL_GUS, "crime_total_count": 0})
 
     police = bundle["police"].copy()
     for column in police.columns:
         if column != "gu":
             police[column] = pd.to_numeric(police[column], errors="coerce")
     police_numeric = [col for col in police.select_dtypes(include=["number"]).columns if col != "gu"]
-    police_grouped = police.groupby("gu")[police_numeric].mean(numeric_only=True).reset_index() if police_numeric and "gu" in police.columns else pd.DataFrame({"gu": SEOUL_GUS})
-    police_grouped["police_satisfaction_score"] = police_grouped.select_dtypes(include=["number"]).mean(axis=1) if not police_grouped.empty else 0
+    if police_numeric and "gu" in police.columns:
+        police_grouped = police.groupby("gu")[police_numeric].mean(numeric_only=True).reset_index()
+        police_grouped["police_satisfaction_score"] = police_grouped[police_numeric].mean(axis=1)
+        police_grouped = police_grouped[["gu", "police_satisfaction_score"]]
+    else:
+        police_grouped = pd.DataFrame({"gu": SEOUL_GUS, "police_satisfaction_score": 0})
     base = pd.DataFrame({"gu": SEOUL_GUS})
     return base.merge(crime_grouped, on="gu", how="left").merge(police_grouped, on="gu", how="left")
 
@@ -219,12 +227,11 @@ def _build_feature_table_from_compact(
         feature["monthly_rent_active_krw"].fillna(feature["monthly_rent_active_krw"].median()).fillna(0) / max(monthly_budget_cap, 1)
     )
     feature["infra_score_raw"] = (
-        feature["hospital_count"].fillna(0)
-        + feature["park_count"].fillna(0)
-        + feature["hospital_points"].fillna(0) / 10
-        + feature["retail_license_count"].fillna(0) / 10
+        feature["hospital_count"].fillna(0) * 0.35
+        + feature["park_count"].fillna(0) * 12
+        + feature["mart_count"].fillna(0) * 60
     )
-    feature["safety_score_raw"] = feature["police_satisfaction_score"].fillna(0) - feature["crime_score_proxy"].fillna(0) / 10
+    feature["safety_score_raw"] = feature["police_satisfaction_score"].fillna(0) - feature["crime_total_count"].fillna(0) / 10
     feature["redevelopment_score_raw"] = feature["redevelopment_count"].fillna(0) + feature["active_stage_count"].fillna(0) / 5
     feature["sale_rent_gap_krw"] = feature["sale_price_krw"] - feature["deposit_price_krw"]
     feature["age_proxy"] = year - feature["rent_build_year"].fillna(feature["sale_build_year"]).fillna(year)
@@ -301,12 +308,11 @@ def build_feature_table(
         feature["monthly_rent_active_krw"].fillna(feature["monthly_rent_active_krw"].median()).fillna(0) / max(monthly_budget_cap, 1)
     )
     feature["infra_score_raw"] = (
-        feature["hospital_count"].fillna(0)
-        + feature["park_count"].fillna(0)
-        + feature["hospital_points"].fillna(0) / 10
-        + feature["retail_license_count"].fillna(0) / 10
+        feature["hospital_count"].fillna(0) * 0.35
+        + feature["park_count"].fillna(0) * 12
+        + feature["mart_count"].fillna(0) * 60
     )
-    feature["safety_score_raw"] = feature["police_satisfaction_score"].fillna(0) - feature["crime_score_proxy"].fillna(0) / 10
+    feature["safety_score_raw"] = feature["police_satisfaction_score"].fillna(0) - feature["crime_total_count"].fillna(0) / 10
     feature["redevelopment_score_raw"] = feature["redevelopment_count"].fillna(0) + feature["active_stage_count"].fillna(0) / 5
     feature["sale_rent_gap_krw"] = feature["sale_price_krw"] - feature["deposit_price_krw"]
     feature["age_proxy"] = year - feature["rent_build_year"].fillna(feature["sale_build_year"]).fillna(year)
