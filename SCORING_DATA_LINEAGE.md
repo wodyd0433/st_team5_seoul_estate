@@ -1,11 +1,82 @@
-# 점수 계산 로직과 데이터 계보
+# 점수 계산 로직 및 데이터 라인리지
 
-이 문서는 대시보드에서 사용하는 점수 계산 방식과 데이터 계보를 명확히 남기기 위한 문서다. 원천 데이터는 `data_all` 폴더의 실데이터만 사용하며, 현재 버전에서는 제거된 `distribution_license.csv`는 더 이상 집계나 시각화에 포함하지 않는다. 인프라 점수는 `hospital.db`에서 자치구별 병원 레코드 수를 집계한 `hospital_count`, `seoul_parks.csv`에서 자치구별 공원 수를 집계한 `park_count`, `seoul_mart.csv`에서 자치구별 정상영업 대형마트 수를 집계한 `mart_count`를 기반으로 계산한다. 치안 점수는 `crime_2024.csv`를 자치구 기준으로 long 형태로 변환해 범죄 건수 합계를 만든 `crime_total_count`와 `police_satisfaction_2025.csv`의 만족도 계열 평균값인 `police_satisfaction_score`를 함께 사용한다.
+## 1) 스케일링(0~100) 계산식
 
-주거 가격 관련 지표는 `seoul_apt_rent_5y.csv`와 `apt_deal_total.csv`에서 생성한다. 전월세 데이터는 `구`, `년월`, `전용면적_m2`를 기준으로 필터링한 뒤 자치구 단위 중앙값으로 `deposit_price_krw`, `monthly_rent_krw`, `monthly_rent_active_krw`를 만든다. 매매 데이터는 같은 방식으로 자치구 단위 중앙값 `sale_price_krw`를 만든다. 연도별 평균 전월세 CSV들은 보조 참조 데이터로 사용하며, 특정 평형 구간을 우선 적용한 뒤 해당 구간 데이터가 없으면 가장 가까운 평형 구간을 선택한다.
+점수 엔진(`src/scoring_engine.py`)은 기본적으로 모든 지표를 0~100으로 정규화한 뒤 가중합한다.
 
-대시보드의 종합점수는 예산, 통근, 치안, 인프라 네 영역 점수를 가중합한 값이다. 예산 점수는 `housing_budget_fit * 70 + scale(price_burden_index + monthly_burden_index, reverse=True) * 0.3` 구조로 계산한다. 인프라 점수는 자치구별 병원 수, 공원 수, 대형마트 수를 각각 스케일링한 뒤 `0.4`, `0.3`, `0.3` 가중치로 합산한다. 치안 점수는 범죄 건수 역방향 스케일 값과 경찰 만족도 스케일 값을 `0.55`, `0.45` 비중으로 합산한다. 통근 점수는 1인 가구는 단일 통근시간, 2인 맞벌이는 평균 통근시간과 최장 통근시간을 함께 반영한다.
+### MinMax
+- 정방향: `scaled = (x - min(x)) / (max(x)-min(x)) * 100`
+- 역방향(값이 작을수록 좋은 지표): `scaled_rev = 100 - scaled`
+- 분모가 0이면 50점 고정
 
-정비사업 관련 값은 `25.12기준.서울시정비사업추진현황.csv`에서 자치구별 전체 구역 수(`redevelopment_count`)와 진행 단계가 채워진 건수(`active_stage_count`)를 집계해 만든다. 이 값은 별도 개발 분석 탭에서 사용되며, 현재 종합점수의 직접 구성요소는 아니지만 비교 지표와 버블 크기, 분석 그래프에 활용된다.
+### Z-score
+- `z = (x - mean(x)) / std(x)` 후 다시 MinMax로 0~100 변환
+- 역방향은 `100 - scaled`
+- 표준편차 0이면 50점 고정
 
-페르소나 데이터는 `DT_1NW1027.csv`와 `debt_newlyweds.csv`를 결합해 만든다. 두 파일은 개인 데이터가 아니라 집단 통계이므로 직접 조인하지 않고, 소득 분포와 부채 분포를 각각 요약한 뒤 대표 페르소나 테이블로 변환한다. 이 결과가 `persona_profiles.csv`로 배포 데이터에도 저장된다. 따라서 대시보드의 페르소나 프리셋은 원천 통계를 기반으로 한 대표값이며, 실제 개별 가구와 일치한다고 가정하지 않는다.
+### Percentile
+- `scaled = rank_pct(x) * 100`
+- 역방향은 `100 - scaled`
+
+## 2) 영역별 점수식
+
+### 예산 점수
+- `deposit_score = scale(deposit_price_krw, reverse=True)`
+- `monthly_score = scale(monthly_rent_active_krw, reverse=True)`
+- 1인가구: `price_score = 0.45*deposit_score + 0.55*monthly_score`
+- 2인 맞벌이: `price_score = 0.60*deposit_score + 0.40*monthly_score`
+- 최종 예산점수:
+  - `budget_score = housing_budget_fit * 70 + scale(price_burden_index + monthly_burden_index, reverse=True) * 0.3`
+
+### 인프라 점수
+- `infra_score = 0.4*scale(hospital_count) + 0.3*scale(park_count) + 0.3*scale(mart_count)`
+- `retail_license_count`는 원천 제거에 따라 계산에서 제외됨.
+
+### 치안 점수
+- `safety_score = 0.55*scale(crime_total_count, reverse=True) + 0.45*scale(police_satisfaction_score)`
+
+### 통근 점수
+- 1인가구: `commute_score = scale(commute_minutes, reverse=True)`
+- 2인 맞벌이:
+  - `avg_score = scale(commute_minutes, reverse=True)`
+  - `worst_score = scale(worst_commute_minutes, reverse=True)`
+  - `commute_score = 0.6*avg_score + 0.4*worst_score`
+
+### 종합 점수
+- 기본: `weighted_sum = Σ(영역점수 * 영역가중치) / Σ가중치`
+- 옵션식:
+  - 균형 보정: `total = weighted_sum - std(영역점수)*0.15`
+  - 병목 기준: `total = min(영역점수)*0.55 + weighted_sum*0.45`
+
+## 3) 데이터 라인리지(원천→집계→점수)
+
+| 점수 영역 | 원천 데이터 | 파생/조인 방식 |
+|---|---|---|
+| 예산 | `seoul_apt_rent_5y.csv`, `apt_deal_total.csv` | 자치구·연도·면적구간 집계(중앙값), 예산적합/부담지수 계산 |
+| 인프라 | `hospital.db`, `seoul_parks.csv`, `seoul_mart.csv` | 자치구 단위 건수 집계 후 가중합 |
+| 치안 | `crime_2024.csv`, `police_satisfaction_2025.csv` | 자치구 평균/합 집계 후 정규화 |
+| 통근 | `commute_models.csv`, `GU_CENTERS` | 자치구 중심 좌표와 허브 회귀계수로 통근시간 추정 |
+| 개발(비교지표) | `25.12기준.서울시정비사업추진현황.csv` | 구역 수/진행단계 수 집계, 보조 분석에 활용 |
+
+## 4) 점수 분포(배포 데이터 기준)
+
+기준: `year=2025`, `20~29평`, 자치구 25개, MinMax.
+
+### 분위수 요약
+- 예산 점수: min 0.34 / Q1 77.53 / median 83.73 / Q3 86.37 / max 100.00
+- 인프라 점수: min 5.71 / Q1 14.21 / median 19.83 / Q3 36.34 / max 76.43
+- 치안 점수: min 17.17 / Q1 57.74 / median 77.93 / Q3 83.05 / max 90.32
+- 통근 점수: min 0.00 / Q1 29.69 / median 50.98 / Q3 77.08 / max 100.00
+- 종합 점수: min 39.92 / Q1 57.44 / median 61.73 / Q3 65.09 / max 72.49
+
+### 구간 분포(0~20 / 20~40 / 40~60 / 60~80 / 80~100)
+
+```text
+예산  : 2 / 0 / 0 / 7 / 16
+인프라: 13 / 7 / 4 / 1 / 0
+치안  : 1 / 1 / 5 / 9 / 9
+통근  : 3 / 5 / 5 / 7 / 5
+종합  : 0 / 1 / 7 / 17 / 0
+```
+
+해석: 현재 배포 데이터에서는 예산 점수가 상위 구간으로 몰리고, 인프라는 저중간 구간 집중이 뚜렷하다. 따라서 가중치 조정 시 인프라/통근 가중치 변화가 순위에 상대적으로 크게 작동한다.

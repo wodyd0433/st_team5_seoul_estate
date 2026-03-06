@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 
 from src.config import DATA_DIR, DATA_DIR_CANDIDATES, WORKPLACE_HUBS
@@ -45,6 +48,10 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+DOC_DIR = Path(__file__).resolve().parent
+RECOMMENDATION_AUDIT_PATH = DOC_DIR / "RECOMMENDATION_VALUE_AUDIT.md"
+SCORING_LINEAGE_PATH = DOC_DIR / "SCORING_DATA_LINEAGE.md"
+
 
 def _apply_persona_defaults(persona_row: pd.Series) -> None:
     st.session_state["budget_weight"] = float(persona_row["weight_budget"])
@@ -71,6 +78,86 @@ def _ensure_persona_state(persona_profiles: pd.DataFrame) -> pd.Series | None:
         _apply_persona_defaults(persona_row)
 
     return persona_row
+
+
+def _read_markdown(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except Exception as exc:  # pragma: no cover
+        return f"문서를 읽지 못했습니다: `{path.name}`\n\n```text\n{exc}\n```"
+
+
+def _build_rent_distribution_chart(feature_table: pd.DataFrame):
+    rent_cols = ["deposit_price_krw", "monthly_rent_active_krw"]
+    available = [col for col in rent_cols if col in feature_table.columns]
+    if not available:
+        return None
+    rent_view = feature_table[["gu", *available]].melt(
+        id_vars="gu",
+        value_vars=available,
+        var_name="value_type",
+        value_name="value_krw",
+    )
+    rent_view["value_krw"] = pd.to_numeric(rent_view["value_krw"], errors="coerce")
+    rent_view = rent_view.dropna(subset=["value_krw"])
+    if rent_view.empty:
+        return None
+    rent_view["value_type"] = rent_view["value_type"].map(
+        {
+            "deposit_price_krw": "전세보증금",
+            "monthly_rent_active_krw": "월세",
+        }
+    )
+    fig = px.histogram(
+        rent_view,
+        x="value_krw",
+        color="value_type",
+        facet_col="value_type",
+        nbins=16,
+        barmode="overlay",
+        color_discrete_map={"전세보증금": "#8ec5fc", "월세": "#ffb3c1"},
+        title="전세보증금·월세 분포",
+        labels={"value_krw": "금액(원)", "count": "자치구 수", "value_type": "항목"},
+    )
+    fig.update_xaxes(tickformat=",")
+    fig.update_layout(showlegend=False, margin={"l": 20, "r": 20, "t": 48, "b": 20})
+    return fig
+
+
+def _build_score_distribution_chart(recommendations: pd.DataFrame):
+    score_cols = ["budget_score", "infra_score", "safety_score", "commute_score"]
+    available = [col for col in score_cols if col in recommendations.columns]
+    if not available:
+        return None
+    score_view = recommendations[["gu", *available]].melt(
+        id_vars="gu",
+        value_vars=available,
+        var_name="score_type",
+        value_name="score",
+    )
+    score_view["score"] = pd.to_numeric(score_view["score"], errors="coerce")
+    score_view = score_view.dropna(subset=["score"])
+    if score_view.empty:
+        return None
+    score_view["score_type"] = score_view["score_type"].map(
+        {
+            "budget_score": "예산 점수",
+            "infra_score": "인프라 점수",
+            "safety_score": "치안 점수",
+            "commute_score": "통근 점수",
+        }
+    )
+    fig = px.box(
+        score_view,
+        x="score_type",
+        y="score",
+        color="score_type",
+        points="all",
+        title="영역 점수 분포(0~100)",
+        labels={"score_type": "점수 영역", "score": "점수"},
+    )
+    fig.update_layout(showlegend=False, margin={"l": 20, "r": 20, "t": 48, "b": 20})
+    return fig
 
 
 def main() -> None:
@@ -127,6 +214,9 @@ def main() -> None:
 
     budget_cap = st.sidebar.slider("전세 보증금 예산", 100_000_000, 1_500_000_000, key="budget_cap", step=50_000_000)
     monthly_budget_cap = st.sidebar.slider("월세 예산", 300_000, 4_000_000, key="monthly_budget_cap", step=100_000)
+    st.sidebar.caption(
+        f"선택 금액: 전세 {format_korean_money(budget_cap)} / 월세 {format_korean_money(monthly_budget_cap)}"
+    )
     scaling_method = st.sidebar.segmented_control("스케일 방식", ["MinMax", "Z-score", "Percentile"], default="MinMax")
     score_formula = st.sidebar.selectbox("점수 합산 방식", ["가중 합산", "균형 보정", "병목 기준"], index=0)
 
@@ -170,6 +260,10 @@ def main() -> None:
     recommendation_summary = build_recommendation_summary(recommendations, household_type)
     recommendation_map = build_recommendation_map(recommendations, workplace_name, secondary_workplace_name)
     rank_chart = build_top_rank_chart(recommendations)
+    rent_distribution = _build_rent_distribution_chart(feature_table)
+    score_distribution = _build_score_distribution_chart(recommendations)
+    recommendation_audit_md = _read_markdown(RECOMMENDATION_AUDIT_PATH)
+    scoring_lineage_md = _read_markdown(SCORING_LINEAGE_PATH)
 
     tabs = st.tabs(
         [
@@ -178,6 +272,7 @@ def main() -> None:
             "인프라 심층 분석",
             "치안·개발 분석",
             "페르소나 구매 시뮬레이션",
+            "데이터 근거",
         ]
     )
 
@@ -330,6 +425,36 @@ def main() -> None:
                 }
             )
             st.dataframe(sim_table, width="stretch", height=420)
+
+    with tabs[5]:
+        st.markdown('<div class="section-title">데이터 근거</div>', unsafe_allow_html=True)
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("전세 중앙값", format_korean_money(feature_table["deposit_price_krw"].median()))
+        k2.metric("월세 중앙값", format_korean_money(feature_table["monthly_rent_active_krw"].median()))
+        k3.metric("종합점수 중앙값", f"{recommendations['total_score'].median():.1f}점")
+        k4.metric("종합점수 상위", f"{recommendations['total_score'].max():.1f}점")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            with st.container(border=True):
+                st.markdown("#### 추천 값 검증")
+                st.caption("원천/파생/시뮬레이션 구분과 전세·월세 값의 근거")
+                st.write("- 원천 거래 기반 집계값과 시뮬레이션 값을 분리 표기")
+                st.write("- 전세·월세 분포를 동일 축에서 비교")
+            if rent_distribution is not None:
+                st.plotly_chart(rent_distribution, width="stretch")
+        with c2:
+            with st.container(border=True):
+                st.markdown("#### 점수 라인리지")
+                st.caption("스케일링 계산식과 영역별 분포를 한 화면에서 검토")
+                st.write("- MinMax/Z-score/Percentile 계산식 문서화")
+                st.write("- 예산·인프라·치안·통근 점수 분포 공개")
+            if score_distribution is not None:
+                st.plotly_chart(score_distribution, width="stretch")
+        with st.expander("추천 값 검증 문서 보기", expanded=False):
+            st.markdown(recommendation_audit_md)
+        with st.expander("점수 라인리지 문서 보기", expanded=False):
+            st.markdown(scoring_lineage_md)
 
 
 if __name__ == "__main__":
