@@ -5,7 +5,7 @@
 ## Run
 
 ```bash
-pip install -r requirements.txt
+pip install -r ../requirements.txt
 streamlit run app.py
 ```
 
@@ -13,7 +13,7 @@ streamlit run app.py
 
 - `app.py`
 - `src/`
-- `requirements.txt`
+- 루트 `requirements.txt`
 
 ## Data Resolution Order
 
