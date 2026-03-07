@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import pandas as pd
 
@@ -17,26 +17,29 @@ from src.io_utils import load_dataset_bundle
 
 def _prepare_rent_compact(rent: pd.DataFrame) -> pd.DataFrame:
     frame = rent.copy()
-    frame["year"] = frame["?꾩썡"].astype(str).str[:4].astype(int)
-    frame["area_pyeong_bucket"] = (pd.to_numeric(frame["?꾩슜硫댁쟻_m2"], errors="coerce") / 3.3058).round().clip(10, 45)
+    frame["year"] = pd.to_numeric(frame["년월"].astype(str).str[:4], errors="coerce")
+    frame["area_pyeong_bucket"] = (pd.to_numeric(frame["전용면적_m2"], errors="coerce") / 3.3058).round().clip(10, 45)
+    frame = frame.dropna(subset=["gu", "year", "area_pyeong_bucket"]).copy()
+    frame["year"] = frame["year"].astype(int)
+
     grouped = (
         frame.groupby(["gu", "year", "area_pyeong_bucket"], dropna=False)
         .agg(
-            deposit_price_krw=("蹂댁쬆湲?留뚯썝_krw", "median"),
-            monthly_rent_krw=("?붿꽭_留뚯썝_krw", "median"),
-            rent_area_m2=("?꾩슜硫댁쟻_m2", "median"),
-            rent_build_year=("嫄댁텞?꾨룄", lambda s: pd.to_numeric(s, errors="coerce").median()),
+            deposit_price_krw=("보증금_만원_krw", "median"),
+            monthly_rent_krw=("월세_만원_krw", "median"),
+            rent_area_m2=("전용면적_m2", "median"),
+            rent_build_year=("건축년도", lambda s: pd.to_numeric(s, errors="coerce").median()),
             rent_txn_count=("gu", "size"),
         )
         .reset_index()
     )
 
-    positive = frame.loc[frame["?붿꽭_留뚯썝_krw"].fillna(0) > 0].copy()
+    positive = frame.loc[frame["월세_만원_krw"].fillna(0) > 0].copy()
     positive_grouped = (
         positive.groupby(["gu", "year", "area_pyeong_bucket"], dropna=False)
         .agg(
-            monthly_rent_active_krw=("?붿꽭_留뚯썝_krw", "median"),
-            monthly_rent_positive_ratio=("?붿꽭_留뚯썝_krw", lambda s: (s.fillna(0) > 0).mean()),
+            monthly_rent_active_krw=("월세_만원_krw", "median"),
+            monthly_rent_positive_ratio=("월세_만원_krw", lambda s: (s.fillna(0) > 0).mean()),
         )
         .reset_index()
     )
@@ -47,6 +50,8 @@ def _prepare_sale_compact(sale: pd.DataFrame) -> pd.DataFrame:
     frame = sale.copy()
     frame["area_pyeong_bucket"] = (pd.to_numeric(frame["excluUseAr"], errors="coerce") / 3.3058).round().clip(10, 45)
     frame["sale_price_krw"] = pd.to_numeric(frame["dealAmount_krw"], errors="coerce")
+    frame = frame.dropna(subset=["gu", "dealYear", "area_pyeong_bucket"]).copy()
+    frame["dealYear"] = pd.to_numeric(frame["dealYear"], errors="coerce").astype(int)
     return (
         frame.groupby(["gu", "dealYear", "area_pyeong_bucket"], dropna=False)
         .agg(
@@ -63,7 +68,7 @@ def _prepare_sale_compact(sale: pd.DataFrame) -> pd.DataFrame:
 def build_deploy_data(output_dir: Path) -> None:
     bundle = load_dataset_bundle()
     if bundle.get("is_compact"):
-        raise RuntimeError("?꾩옱 寃쎈웾 ?곗씠??紐⑤뱶?낅땲?? ?먮낯 datasets/raw ???덈뒗 ?섍꼍?먯꽌 ?ㅽ뻾?댁빞 ?⑸땲??")
+        raise RuntimeError("원천 데이터 대신 이미 배포용 경량 데이터가 로드되었습니다. datasets/raw 기준으로 다시 실행해야 합니다.")
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -75,6 +80,7 @@ def build_deploy_data(output_dir: Path) -> None:
         .merge(_aggregate_safety(bundle), on="gu", how="left")
         .merge(_aggregate_redevelopment(bundle), on="gu", how="left")
     )
+
     housing = rent_compact.merge(sale_compact, on=["gu", "year", "area_pyeong_bucket"], how="outer")
     housing = housing.sort_values(["year", "gu", "area_pyeong_bucket"]).reset_index(drop=True)
     persona_profiles = bundle["persona_profiles"].copy()
