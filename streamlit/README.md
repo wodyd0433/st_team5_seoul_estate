@@ -1,6 +1,6 @@
 # Seoul Newlywed Housing Recommendation Dashboard
 
-`streamlit` 디렉터리는 Streamlit 앱 소스만 관리한다.
+`streamlit/`은 서울 신혼부부 주거 추천 대시보드 앱 소스 디렉터리다.
 
 ## Run
 
@@ -23,7 +23,7 @@ streamlit run app.py
 2. 루트 `datasets/raw/`
 3. 루트 `datasets/deploy/`
 
-운영 원천 데이터가 없더라도 `datasets/deploy/`만 있으면 대시보드를 실행할 수 있다.
+운영 원천 데이터가 없더라도 `datasets/deploy/`만 있으면 경량 모드로 실행할 수 있다.
 
 ## Related Directories
 
