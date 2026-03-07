@@ -4,7 +4,6 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import streamlit as st
 
 from src.config import GU_CENTERS, WORKPLACE_HUBS
 
@@ -16,10 +15,10 @@ def format_korean_money(value: float | int | None) -> str:
 
 
 def build_short_reco_label(row: pd.Series, persona_name: str) -> str:
-    status = row.get("buying_status_3y")
-    if pd.notna(status):
-        return f"{persona_name} 기준 3년 후 {status}"
-    return f"{persona_name} 기준 상위 추천"
+    grade = row.get("total_grade")
+    if pd.notna(grade):
+        return f"{persona_name} 기준 {grade}등급 추천"
+    return f"{persona_name} 기준 추천"
 
 
 def _apply_common_layout(fig: go.Figure) -> go.Figure:
@@ -53,7 +52,7 @@ def build_visualization_gallery(
         }
     )
     figs["infra_bar"] = _apply_common_layout(
-        px.bar(infra_long, x="gu", y="값", color="지표", barmode="group", title="상위 추천 지역 인프라 비교")
+        px.bar(infra_long, x="gu", y="값", color="지표", barmode="group", title="상위 추천지 인프라 비교")
     )
     figs["infra_bar"].update_xaxes(title="자치구")
     figs["infra_bar"].update_yaxes(title="시설 수")
@@ -67,7 +66,7 @@ def build_visualization_gallery(
             color="total_score",
             hover_name="gu",
             color_continuous_scale="Blues",
-            title="병원·공원·대형마트 분포",
+            title="병원·공원·마트 분포",
             labels={"hospital_count": "병원 수", "park_count": "공원 수", "mart_count": "대형마트 수", "total_score": "종합점수"},
         )
     )
@@ -80,7 +79,7 @@ def build_visualization_gallery(
             y="infra_score",
             color="infra_score",
             color_continuous_scale="Teal",
-            title="인프라 종합점수",
+            title="인프라 점수",
             labels={"gu": "자치구", "infra_score": "인프라 점수"},
         )
     )
@@ -135,7 +134,7 @@ def build_visualization_gallery(
         }
     )
     figs["redevelopment_stage_bar"] = _apply_common_layout(
-        px.bar(redevelopment_long, x="gu", y="값", color="지표", barmode="group", title="정비사업 단계별 현황")
+        px.bar(redevelopment_long, x="gu", y="값", color="지표", barmode="group", title="재개발 단계별 현황")
     )
     figs["redevelopment_stage_bar"].update_xaxes(title="자치구")
     figs["redevelopment_stage_bar"].update_yaxes(title="건수")
@@ -154,16 +153,17 @@ def build_visualization_gallery(
 
     stacked = recommendations.head(10).melt(
         id_vars=["gu"],
-        value_vars=["budget_score", "infra_score", "safety_score", "commute_score"],
+        value_vars=["price_score", "commute_score", "infra_score", "safety_score", "risk_score"],
         var_name="구성요소",
         value_name="점수",
     )
     stacked["구성요소"] = stacked["구성요소"].map(
         {
-            "budget_score": "예산 점수",
+            "price_score": "가격 점수",
+            "commute_score": "통근 점수",
             "infra_score": "인프라 점수",
             "safety_score": "치안 점수",
-            "commute_score": "통근 점수",
+            "risk_score": "전세가율 리스크 점수",
         }
     )
     figs["score_stacked_bar"] = _apply_common_layout(
@@ -182,7 +182,7 @@ def build_visualization_gallery(
             x="gu",
             y=commute_target,
             barmode="group",
-            title="통근시간 비교",
+            title="통근 시간 비교",
             labels={
                 "value": "통근시간(분)",
                 "variable": "항목",
@@ -199,10 +199,10 @@ def build_visualization_gallery(
             x="deposit_price_krw",
             y="monthly_rent_active_krw",
             size="total_score",
-            color="infra_score",
+            color="risk_score",
             hover_name="gu",
             title="전세 보증금과 월세 부담 비교",
-            labels={"deposit_price_krw": "전세 보증금", "monthly_rent_active_krw": "월세", "infra_score": "인프라 점수"},
+            labels={"deposit_price_krw": "전세 보증금", "monthly_rent_active_krw": "월세", "risk_score": "전세가율 리스크 점수"},
         )
     )
     figs["recommendation_bubble"].update_xaxes(tickformat=",")
@@ -217,10 +217,13 @@ def build_recommendation_summary(recommendations: pd.DataFrame, household_type: 
         {
             "자치구": top["gu"],
             "종합점수": top["total_score"].round(1),
-            "예산 점수": top["budget_score"].round(1),
+            "등급": top["total_grade"],
+            "종합별점": top["total_star_label"],
+            "가격 점수": top["price_score"].round(1),
+            "통근 점수": top["commute_score"].round(1),
             "인프라 점수": top["infra_score"].round(1),
             "치안 점수": top["safety_score"].round(1),
-            "통근 점수": top["commute_score"].round(1),
+            "전세가율 점수": top["risk_score"].round(1),
             "면적": (
                 top["selected_area_min_m2"].round(1).astype(str)
                 + "~"
@@ -270,11 +273,12 @@ def build_recommendation_map(
                 zip(
                     all_points["gu"],
                     all_points["total_score"].round(1),
+                    all_points["total_grade"],
                     all_points["deposit_price_krw"].map(format_korean_money),
                     all_points["monthly_rent_active_krw"].map(format_korean_money),
                 )
             ),
-            hovertemplate="<b>%{customdata[0]}</b><br>종합점수 %{customdata[1]}점<br>전세 %{customdata[2]}<br>월세 %{customdata[3]}<extra></extra>",
+            hovertemplate="<b>%{customdata[0]}</b><br>종합점수 %{customdata[1]}점<br>등급 %{customdata[2]}<br>전세 %{customdata[3]}<br>월세 %{customdata[4]}<extra></extra>",
             showlegend=False,
         )
     )
@@ -338,17 +342,7 @@ def build_top_rank_chart(recommendations: pd.DataFrame) -> go.Figure:
         title="종합점수 순위",
         text=top["total_score"].round(1),
     )
-    fig.update_layout(yaxis_title="자치구", xaxis_title="종합점수", coloraxis_showscale=False)
+    fig.update_layout(coloraxis_showscale=False)
+    fig.update_xaxes(title="종합점수")
+    fig.update_yaxes(title="자치구")
     return _apply_common_layout(fig)
-
-
-def render_figure_grid(figures: dict[str, go.Figure]) -> None:
-    names = list(figures.keys())
-    for idx in range(0, len(names), 2):
-        cols = st.columns(2)
-        for offset in range(2):
-            if idx + offset >= len(names):
-                continue
-            key = names[idx + offset]
-            with cols[offset]:
-                st.plotly_chart(figures[key], width="stretch", key=f"gallery_{key}_{idx + offset}")

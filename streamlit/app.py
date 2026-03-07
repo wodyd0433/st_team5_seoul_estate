@@ -10,7 +10,7 @@ from src.config import DATA_DIR, DATA_DIR_CANDIDATES, PROJECT_ROOT, WORKPLACE_HU
 from src.feature_engineering import build_feature_table
 from src.io_utils import load_dataset_bundle
 from src.persona import build_persona_simulation
-from src.scoring_engine import prepare_commute_frame, score_recommendations
+from src.scoring_engine import FIXED_WEIGHTS, prepare_commute_frame, score_recommendations
 from src.visualization import (
     build_recommendation_map,
     build_recommendation_summary,
@@ -32,8 +32,6 @@ AREA_BAND_OPTIONS = {
     "30평대": (30, 39),
     "40평대+": (40, 45),
 }
-SCALING_OPTIONS = ["MinMax", "Z-score", "Percentile"]
-SCORE_FORMULAS = ["가중 합산", "균형 보정", "병목 기준"]
 
 
 st.set_page_config(page_title=PAGE_TITLE, layout="wide", initial_sidebar_state="expanded")
@@ -68,12 +66,20 @@ def _read_markdown(path: Path) -> str:
 
 
 def _apply_persona_defaults(persona_row: pd.Series) -> None:
-    st.session_state["budget_weight"] = float(persona_row["weight_budget"])
-    st.session_state["commute_weight"] = float(persona_row["weight_commute"])
-    st.session_state["safety_weight"] = float(persona_row["weight_safety"])
-    st.session_state["infra_weight"] = float(persona_row["weight_infra"])
     st.session_state["budget_cap"] = int(persona_row["deposit_budget_cap_krw"])
     st.session_state["monthly_budget_cap"] = int(persona_row["monthly_budget_cap_krw"])
+
+
+def _get_applied_weights() -> dict[str, int]:
+    if "applied_weights_pct" not in st.session_state:
+        st.session_state["applied_weights_pct"] = {
+            "price": int(FIXED_WEIGHTS["price"] * 100),
+            "commute": int(FIXED_WEIGHTS["commute"] * 100),
+            "infra": int(FIXED_WEIGHTS["infra"] * 100),
+            "safety": int(FIXED_WEIGHTS["safety"] * 100),
+            "risk": int(FIXED_WEIGHTS["risk"] * 100),
+        }
+    return dict(st.session_state["applied_weights_pct"])
 
 
 def _ensure_persona_state(persona_profiles: pd.DataFrame) -> pd.Series | None:
@@ -157,7 +163,7 @@ def _build_rent_distribution_chart(feature_table: pd.DataFrame):
 
 
 def _build_score_distribution_chart(recommendations: pd.DataFrame):
-    score_cols = ["budget_score", "infra_score", "safety_score", "commute_score"]
+    score_cols = ["price_score", "commute_score", "infra_score", "safety_score", "risk_score"]
     available = [col for col in score_cols if col in recommendations.columns]
     if not available:
         return None
@@ -175,10 +181,11 @@ def _build_score_distribution_chart(recommendations: pd.DataFrame):
 
     score_view["score_type"] = score_view["score_type"].map(
         {
-            "budget_score": "예산 점수",
+            "price_score": "가격 점수",
+            "commute_score": "통근 점수",
             "infra_score": "인프라 점수",
             "safety_score": "치안 점수",
-            "commute_score": "통근 점수",
+            "risk_score": "전세가율 점수",
         }
     )
     fig = px.box(
@@ -199,12 +206,13 @@ def _show_intro(bundle: dict[str, object]) -> None:
     with st.popover("대시보드 기준 설명"):
         st.markdown(
             """
-            - `예산 점수`: 전세보증금과 월세 부담을 함께 반영합니다.
-            - `통근 점수`: 주요 직장까지의 예상 통근시간을 기준으로 계산합니다.
-            - `치안 점수`: 범죄 발생 건수와 경찰 만족도를 함께 반영합니다.
-            - `인프라 점수`: 병원, 공원, 대형마트 수를 함께 반영합니다.
-            - `페르소나`: 신혼부부 통계를 바탕으로 기본 가중치와 예산 한도를 제안합니다.
-            - `직접 조정`: 페르소나를 불러온 뒤에도 가중치와 예산을 직접 조절할 수 있습니다.
+            - `가격 점수`: 전세가 중위값을 5단계 별점으로 환산합니다.
+            - `통근 점수`: 예측 통근시간을 20/30/45/60분 기준으로 평가합니다.
+            - `인프라 점수`: 대형마트, 병원, 공원 조합을 규칙 기반으로 평가합니다.
+            - `치안 점수`: 범죄 발생량과 경찰 만족도를 함께 봅니다.
+            - `전세가율 점수`: 전세가율이 높을수록 리스크가 커집니다.
+            - `가중치`: 가격, 통근, 인프라, 치안, 전세가율 비율을 직접 입력하고 100% 합계로 확정합니다.
+            - `페르소나`: 예산 한도와 향후 매수 시뮬레이션에만 사용합니다.
             """
         )
 
@@ -229,6 +237,7 @@ def _show_data_load_error(exc: Exception) -> None:
 def _collect_sidebar_inputs(bundle: dict[str, object]) -> tuple[pd.Series | None, dict[str, object]]:
     persona_row = _ensure_persona_state(bundle.get("persona_profiles", pd.DataFrame()))
     available_years = _resolve_available_years(bundle)
+    applied_weights_pct = _get_applied_weights()
 
     selected_year = st.sidebar.selectbox("기준 연도", available_years, index=0)
     household_type = st.sidebar.selectbox("가구 유형", HOUSEHOLD_OPTIONS, index=1)
@@ -256,15 +265,34 @@ def _collect_sidebar_inputs(bundle: dict[str, object]) -> tuple[pd.Series | None
     st.sidebar.caption(
         f"선택 금액: 전세 {format_korean_money(budget_cap)} / 월세 {format_korean_money(monthly_budget_cap)}"
     )
+    st.sidebar.markdown("#### 점수 가중치")
+    with st.sidebar.form("weight_form"):
+        price_weight = st.number_input("가격(%)", min_value=0, max_value=100, value=applied_weights_pct["price"], step=1)
+        commute_weight = st.number_input("통근(%)", min_value=0, max_value=100, value=applied_weights_pct["commute"], step=1)
+        infra_weight = st.number_input("인프라(%)", min_value=0, max_value=100, value=applied_weights_pct["infra"], step=1)
+        safety_weight = st.number_input("치안(%)", min_value=0, max_value=100, value=applied_weights_pct["safety"], step=1)
+        risk_weight = st.number_input("전세가율(%)", min_value=0, max_value=100, value=applied_weights_pct["risk"], step=1)
+        submitted = st.form_submit_button("가중치 확정", use_container_width=True)
 
-    scaling_method = st.sidebar.segmented_control("스케일링 방식", SCALING_OPTIONS, default="MinMax")
-    score_formula = st.sidebar.selectbox("점수 합산 방식", SCORE_FORMULAS, index=0)
+    pending_total = int(price_weight + commute_weight + infra_weight + safety_weight + risk_weight)
+    if submitted:
+        if pending_total == 100:
+            st.session_state["applied_weights_pct"] = {
+                "price": int(price_weight),
+                "commute": int(commute_weight),
+                "infra": int(infra_weight),
+                "safety": int(safety_weight),
+                "risk": int(risk_weight),
+            }
+            applied_weights_pct = dict(st.session_state["applied_weights_pct"])
+            st.sidebar.success("가중치를 반영했습니다.")
+        else:
+            st.sidebar.error(f"합계가 {pending_total}%입니다. 100%로 맞춘 뒤 확정해야 합니다.")
 
-    st.sidebar.markdown("#### 영역 가중치 조정")
-    budget_weight = st.sidebar.slider("예산", 0.0, 1.0, key="budget_weight", step=0.01)
-    commute_weight = st.sidebar.slider("통근", 0.0, 1.0, key="commute_weight", step=0.01)
-    safety_weight = st.sidebar.slider("치안", 0.0, 1.0, key="safety_weight", step=0.01)
-    infra_weight = st.sidebar.slider("인프라", 0.0, 1.0, key="infra_weight", step=0.01)
+    st.sidebar.caption(
+        f"적용 중: 가격 {applied_weights_pct['price']} / 통근 {applied_weights_pct['commute']} / "
+        f"인프라 {applied_weights_pct['infra']} / 치안 {applied_weights_pct['safety']} / 전세가율 {applied_weights_pct['risk']} (%)"
+    )
 
     state = {
         "selected_year": selected_year,
@@ -277,14 +305,8 @@ def _collect_sidebar_inputs(bundle: dict[str, object]) -> tuple[pd.Series | None
         "max_area_m2": round(max_area_pyeong * 3.3058, 1),
         "budget_cap": budget_cap,
         "monthly_budget_cap": monthly_budget_cap,
-        "scaling_method": scaling_method,
-        "score_formula": score_formula,
-        "weights": {
-            "budget": budget_weight,
-            "commute": commute_weight,
-            "safety": safety_weight,
-            "infra": infra_weight,
-        },
+        "weights": {key: value / 100 for key, value in applied_weights_pct.items()},
+        "weights_pct": applied_weights_pct,
     }
     return persona_row, state
 
@@ -312,9 +334,7 @@ def _compute_outputs(bundle: dict[str, object], ui: dict[str, object]) -> dict[s
         selected_gus=[],
         commute_frame=commute_frame,
         weights=ui["weights"],
-        scaling_method=ui["scaling_method"],
         missing_strategy="mean",
-        score_formula=ui["score_formula"],
         household_type=ui["household_type"],
     )
 
@@ -343,6 +363,10 @@ def _render_summary_tab(
             f"월소득 추정 {format_korean_money(persona_row['monthly_income_estimate_krw'])} | "
             f"부채 추정 {format_korean_money(persona_row['debt_balance_estimate_krw'])}"
         )
+    st.caption(
+        f"적용 가중치: 가격 {ui['weights_pct']['price']}% / 통근 {ui['weights_pct']['commute']}% / "
+        f"인프라 {ui['weights_pct']['infra']}% / 치안 {ui['weights_pct']['safety']}% / 전세가율 {ui['weights_pct']['risk']}%"
+    )
 
     top_cards = recommendations.head(5).copy()
     card_cols = st.columns(5)
@@ -352,19 +376,23 @@ def _render_summary_tab(
                 st.markdown(f"**TOP {idx + 1}**")
                 st.markdown(f"### {row['gu']}")
                 st.markdown(f"## {row['total_score']:.1f}점")
+                st.caption(f"{row['total_grade']}등급 · {row['total_star_label']}")
                 label_persona = persona_row["persona_name"] if persona_row is not None else "기본"
-                st.caption(build_short_reco_label(row, label_persona))
+                st.write(build_short_reco_label(row, label_persona))
                 st.text(
                     f"{ui['min_area_m2']}~{ui['max_area_m2']}㎡ / "
                     f"{ui['min_area_pyeong']}~{ui['max_area_pyeong']}평 기준"
                 )
                 st.write(f"전세 보증금 {format_korean_money(row['deposit_price_krw'])}")
                 st.write(f"월세 {format_korean_money(row['monthly_rent_active_krw'])}")
+                st.write(f"전세가율 {row['jeonse_ratio_pct']:.1f}%")
                 if ui["household_type"].startswith("2") and pd.notna(row.get("secondary_commute_minutes")):
                     st.write(f"직장1 통근 {row['primary_commute_minutes']:.1f}분")
                     st.write(f"직장2 통근 {row['secondary_commute_minutes']:.1f}분")
                 else:
                     st.write(f"통근 {row['commute_minutes']:.1f}분")
+                if row.get("risk_warning"):
+                    st.warning(row["risk_warning"])
 
     left, right = st.columns([1.05, 1])
     with left:
@@ -379,16 +407,20 @@ def _render_compare_tab(recommendations: pd.DataFrame) -> None:
     compare_cols = [
         "gu",
         "total_score",
+        "total_grade",
+        "total_star_label",
         "selected_area_min_m2",
         "selected_area_max_m2",
         "selected_area_min_pyeong",
         "selected_area_max_pyeong",
         "deposit_price_krw",
         "monthly_rent_active_krw",
-        "budget_score",
+        "jeonse_ratio_pct",
+        "price_score",
+        "commute_score",
         "infra_score",
         "safety_score",
-        "commute_score",
+        "risk_score",
         "primary_commute_minutes",
         "secondary_commute_minutes",
         "worst_commute_minutes",
@@ -406,6 +438,7 @@ def _render_compare_tab(recommendations: pd.DataFrame) -> None:
     )
     compare["deposit_price_krw"] = compare["deposit_price_krw"].map(format_korean_money)
     compare["monthly_rent_active_krw"] = compare["monthly_rent_active_krw"].map(format_korean_money)
+    compare["jeonse_ratio_pct"] = compare["jeonse_ratio_pct"].map(lambda x: f"{x:.1f}%" if pd.notna(x) else "-")
     compare = compare.drop(
         columns=["selected_area_min_m2", "selected_area_max_m2", "selected_area_min_pyeong", "selected_area_max_pyeong"]
     )
@@ -413,12 +446,16 @@ def _render_compare_tab(recommendations: pd.DataFrame) -> None:
         columns={
             "gu": "자치구",
             "total_score": "종합점수",
+            "total_grade": "등급",
+            "total_star_label": "종합별점",
             "deposit_price_krw": "전세 보증금",
             "monthly_rent_active_krw": "월세",
-            "budget_score": "예산 점수",
+            "jeonse_ratio_pct": "전세가율",
+            "price_score": "가격 점수",
+            "commute_score": "통근 점수",
             "infra_score": "인프라 점수",
             "safety_score": "치안 점수",
-            "commute_score": "통근 점수",
+            "risk_score": "전세가율 점수",
             "primary_commute_minutes": "직장1 통근시간",
             "secondary_commute_minutes": "직장2 통근시간",
             "worst_commute_minutes": "최장 통근시간",
@@ -493,8 +530,8 @@ def _render_data_tab(
     with c1:
         with st.container(border=True):
             st.markdown("#### 추천 값 검증")
-            st.caption("추천·시뮬레이션·요약에 사용한 전세와 월세 값의 분포를 점검합니다.")
-            st.write("- 자치구 집계값과 시뮬레이션 값을 분리해 확인")
+            st.caption("추천과 시뮬레이션에 사용한 전세·월세 분포를 점검합니다.")
+            st.write("- 자치구 집계값과 추천값을 분리해 확인")
             st.write("- 전세와 월세 분포를 동일 축에서 비교")
         if rent_distribution is not None:
             st.plotly_chart(rent_distribution, width="stretch")
@@ -502,9 +539,9 @@ def _render_data_tab(
     with c2:
         with st.container(border=True):
             st.markdown("#### 점수 라인리지")
-            st.caption("스케일링 결과와 영역별 분포를 화면에서 검토합니다.")
-            st.write("- MinMax, Z-score, Percentile 계산 방식 비교")
-            st.write("- 예산, 인프라, 치안, 통근 점수 분포 공개")
+            st.caption("5개 축 점수 분포와 종합점수 산식을 검토합니다.")
+            st.write("- 가격, 통근, 인프라, 치안, 전세가율 점수 공개")
+            st.write("- 고정 가중합 기반 종합점수 계산")
         if score_distribution is not None:
             st.plotly_chart(score_distribution, width="stretch")
 

@@ -18,9 +18,21 @@ def _filter_by_area_range(frame: pd.DataFrame, area_column: str, min_area_pyeong
     return filtered if not filtered.empty else frame
 
 
+def _weighted_average(values: pd.Series, weights: pd.Series) -> float:
+    numeric_values = pd.to_numeric(values, errors="coerce")
+    numeric_weights = pd.to_numeric(weights, errors="coerce").fillna(0)
+    mask = numeric_values.notna() & numeric_weights.gt(0)
+    if not mask.any():
+        return float(numeric_values.dropna().median()) if numeric_values.notna().any() else np.nan
+    return float(np.average(numeric_values.loc[mask], weights=numeric_weights.loc[mask]))
+
+
 def _aggregate_rent(rent: pd.DataFrame) -> pd.DataFrame:
     frame = rent.copy()
-    frame["year"] = frame["년월"].astype(str).str[:4].astype(int)
+    frame["year"] = pd.to_numeric(frame["년월"].astype(str).str[:4], errors="coerce")
+    frame = frame.dropna(subset=["gu", "year"]).copy()
+    frame["year"] = frame["year"].astype(int)
+
     positive_monthly = frame.loc[frame["월세_만원_krw"].fillna(0) > 0].copy()
     grouped = frame.groupby(["gu", "year"], dropna=False).agg(
         deposit_price_krw=("보증금_만원_krw", "median"),
@@ -43,6 +55,9 @@ def _aggregate_rent(rent: pd.DataFrame) -> pd.DataFrame:
 def _aggregate_sale(sale: pd.DataFrame) -> pd.DataFrame:
     frame = sale.copy()
     frame["sale_price_krw"] = pd.to_numeric(frame["dealAmount_krw"], errors="coerce")
+    frame["dealYear"] = pd.to_numeric(frame["dealYear"], errors="coerce")
+    frame = frame.dropna(subset=["gu", "dealYear"]).copy()
+    frame["dealYear"] = frame["dealYear"].astype(int)
     grouped = frame.groupby(["gu", "dealYear"], dropna=False).agg(
         sale_price_krw=("sale_price_krw", "median"),
         sale_area_m2=("excluUseAr", "median"),
@@ -52,61 +67,10 @@ def _aggregate_sale(sale: pd.DataFrame) -> pd.DataFrame:
     return grouped.reset_index().rename(columns={"dealYear": "year"})
 
 
-def _aggregate_yearly_rent(yearly_rent: dict[int, pd.DataFrame]) -> pd.DataFrame:
-    rows = []
-    for year, df in yearly_rent.items():
-        temp = df.copy()
-        temp["year"] = year
-        if "gu" not in temp.columns:
-            gu_candidates = [col for col in temp.columns if "구" in str(col)]
-            if gu_candidates:
-                temp["gu"] = temp[gu_candidates[0]]
-        numeric_cols = [col for col in temp.columns if col.endswith("_krw")]
-        if not numeric_cols or "gu" not in temp.columns:
-            continue
-        agg_row = temp.groupby("gu")[numeric_cols].median().reset_index()
-        agg_row["year"] = year
-        rows.append(agg_row)
-    return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(columns=["gu", "year"])
-
-
-def _aggregate_yearly_rent_for_area_range(
-    yearly_rent: dict[int, pd.DataFrame],
-    min_area_pyeong: int,
-    max_area_pyeong: int,
-) -> pd.DataFrame:
-    rows = []
-    for year, df in yearly_rent.items():
-        temp = df.copy()
-        temp["year"] = year
-        if "gu" not in temp.columns:
-            gu_candidates = [col for col in temp.columns if "구" in str(col)]
-            if gu_candidates:
-                temp["gu"] = temp[gu_candidates[0]]
-        if "면적구간" in temp.columns:
-            temp["면적구간"] = pd.to_numeric(temp["면적구간"], errors="coerce")
-            in_range = temp["면적구간"].between(min_area_pyeong, max_area_pyeong, inclusive="both")
-            filtered = temp.loc[in_range].copy()
-            if not filtered.empty:
-                temp = filtered
-            else:
-                center = (min_area_pyeong + max_area_pyeong) / 2
-                temp["area_gap"] = (temp["면적구간"] - center).abs()
-                temp = temp.sort_values(["gu", "area_gap"]).drop_duplicates("gu")
-        numeric_cols = [col for col in temp.columns if col.endswith("_krw")]
-        if not numeric_cols or "gu" not in temp.columns:
-            continue
-        agg_row = temp.groupby("gu")[numeric_cols].median().reset_index()
-        agg_row["year"] = year
-        rows.append(agg_row)
-    return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(columns=["gu", "year"])
-
-
 def _aggregate_infra(bundle: dict[str, object]) -> pd.DataFrame:
     infra = bundle["infra"][["gu", "hospital_count", "park_count", "mart_count"]].copy()
-    infra["hospital_count"] = pd.to_numeric(infra["hospital_count"], errors="coerce")
-    infra["park_count"] = pd.to_numeric(infra["park_count"], errors="coerce")
-    infra["mart_count"] = pd.to_numeric(infra["mart_count"], errors="coerce")
+    for column in ["hospital_count", "park_count", "mart_count"]:
+        infra[column] = pd.to_numeric(infra[column], errors="coerce")
     infra = infra.groupby("gu", dropna=False)[["hospital_count", "park_count", "mart_count"]].mean().reset_index()
     hospital = bundle["hospital"].groupby("gu", dropna=False).size().rename("hospital_points").reset_index()
     park_stats = bundle["park_stats"].copy()
@@ -139,30 +103,61 @@ def _aggregate_safety(bundle: dict[str, object]) -> pd.DataFrame:
         police_grouped = police_grouped[["gu", "police_satisfaction_score"]]
     else:
         police_grouped = pd.DataFrame({"gu": SEOUL_GUS, "police_satisfaction_score": 0})
-    base = pd.DataFrame({"gu": SEOUL_GUS})
-    return base.merge(crime_grouped, on="gu", how="left").merge(police_grouped, on="gu", how="left")
+
+    return pd.DataFrame({"gu": SEOUL_GUS}).merge(crime_grouped, on="gu", how="left").merge(police_grouped, on="gu", how="left")
 
 
 def _aggregate_redevelopment(bundle: dict[str, object]) -> pd.DataFrame:
     frame = bundle["redevelopment"].copy()
-    stage_col = "사업추진단계" if "사업추진단계" in frame.columns else next((col for col in frame.columns if "단계" in str(col)), None)
+    stage_col = next((col for col in frame.columns if "단계" in str(col)), None)
     if "gu" not in frame.columns or frame["gu"].notna().sum() == 0:
         return pd.DataFrame({"gu": SEOUL_GUS, "redevelopment_count": 0, "active_stage_count": 0})
+
     base = frame.groupby("gu").size().rename("redevelopment_count").reset_index()
     if stage_col and stage_col in frame.columns:
         active = frame.groupby("gu")[stage_col].apply(lambda s: s.notna().sum()).rename("active_stage_count").reset_index()
         return pd.DataFrame({"gu": SEOUL_GUS}).merge(base, on="gu", how="left").merge(active, on="gu", how="left").fillna(0)
+
     base["active_stage_count"] = 0
     return pd.DataFrame({"gu": SEOUL_GUS}).merge(base, on="gu", how="left").fillna(0)
 
 
-def _weighted_average(values: pd.Series, weights: pd.Series) -> float:
-    numeric_values = pd.to_numeric(values, errors="coerce")
-    numeric_weights = pd.to_numeric(weights, errors="coerce").fillna(0)
-    mask = numeric_values.notna() & numeric_weights.gt(0)
-    if not mask.any():
-        return float(numeric_values.dropna().median()) if numeric_values.notna().any() else np.nan
-    return float(np.average(numeric_values.loc[mask], weights=numeric_weights.loc[mask]))
+def _add_common_derived_fields(
+    feature: pd.DataFrame,
+    year: int,
+    budget_cap: int,
+    monthly_budget_cap: int,
+    min_area_pyeong: int,
+    max_area_pyeong: int,
+) -> pd.DataFrame:
+    feature = feature.copy()
+    feature["year"] = pd.to_numeric(feature.get("year"), errors="coerce").fillna(year).astype(int)
+    feature["budget_fit"] = feature["deposit_price_krw"].fillna(feature["deposit_price_krw"].median()).le(budget_cap).astype(int)
+    feature["monthly_budget_fit"] = (
+        feature["monthly_rent_active_krw"].fillna(feature["monthly_rent_active_krw"].median()).fillna(0).le(monthly_budget_cap).astype(int)
+    )
+    feature["housing_budget_fit"] = ((feature["budget_fit"] + feature["monthly_budget_fit"]) >= 2).astype(int)
+    feature["price_burden_index"] = feature["deposit_price_krw"].fillna(feature["deposit_price_krw"].median()) / max(budget_cap, 1)
+    feature["monthly_burden_index"] = (
+        feature["monthly_rent_active_krw"].fillna(feature["monthly_rent_active_krw"].median()).fillna(0) / max(monthly_budget_cap, 1)
+    )
+    feature["infra_score_raw"] = (
+        feature["hospital_count"].fillna(0) * 0.35
+        + feature["park_count"].fillna(0) * 12
+        + feature["mart_count"].fillna(0) * 60
+    )
+    feature["safety_score_raw"] = feature["police_satisfaction_score"].fillna(0) - feature["crime_total_count"].fillna(0) / 10
+    feature["redevelopment_score_raw"] = feature["redevelopment_count"].fillna(0) + feature["active_stage_count"].fillna(0) / 5
+    feature["sale_rent_gap_krw"] = feature["sale_price_krw"] - feature["deposit_price_krw"]
+    feature["jeonse_ratio_pct"] = (
+        feature["deposit_price_krw"] / feature["sale_price_krw"].replace(0, np.nan) * 100
+    )
+    feature["age_proxy"] = year - feature["rent_build_year"].fillna(feature["sale_build_year"]).fillna(year)
+    feature["selected_area_min_pyeong"] = min_area_pyeong
+    feature["selected_area_max_pyeong"] = max_area_pyeong
+    feature["selected_area_min_m2"] = round(min_area_pyeong * 3.3058, 1)
+    feature["selected_area_max_m2"] = round(max_area_pyeong * 3.3058, 1)
+    return feature
 
 
 def _build_feature_table_from_compact(
@@ -181,6 +176,7 @@ def _build_feature_table_from_compact(
         housing["year"].eq(year)
         & housing["area_pyeong_bucket"].between(min_area_pyeong, max_area_pyeong, inclusive="both")
     ].copy()
+
     if filtered.empty:
         fallback = housing.loc[housing["year"].eq(year)].copy()
         if fallback.empty:
@@ -211,35 +207,9 @@ def _build_feature_table_from_compact(
         )
 
     housing_summary = filtered.groupby("gu", dropna=False).apply(_summarize_group, include_groups=False).reset_index()
-    feature = pd.DataFrame({"gu": SEOUL_GUS}).merge(housing_summary, on="gu", how="left").merge(
-        district_metrics,
-        on="gu",
-        how="left",
-    )
-    feature["year"] = year
-    feature["budget_fit"] = ((feature["deposit_price_krw"].fillna(feature["deposit_price_krw"].median()) <= budget_cap)).astype(int)
-    feature["monthly_budget_fit"] = (
-        feature["monthly_rent_active_krw"].fillna(feature["monthly_rent_active_krw"].median()).fillna(0).le(monthly_budget_cap).astype(int)
-    )
-    feature["housing_budget_fit"] = ((feature["budget_fit"] + feature["monthly_budget_fit"]) >= 2).astype(int)
-    feature["price_burden_index"] = feature["deposit_price_krw"].fillna(feature["deposit_price_krw"].median()) / max(budget_cap, 1)
-    feature["monthly_burden_index"] = (
-        feature["monthly_rent_active_krw"].fillna(feature["monthly_rent_active_krw"].median()).fillna(0) / max(monthly_budget_cap, 1)
-    )
-    feature["infra_score_raw"] = (
-        feature["hospital_count"].fillna(0) * 0.35
-        + feature["park_count"].fillna(0) * 12
-        + feature["mart_count"].fillna(0) * 60
-    )
-    feature["safety_score_raw"] = feature["police_satisfaction_score"].fillna(0) - feature["crime_total_count"].fillna(0) / 10
-    feature["redevelopment_score_raw"] = feature["redevelopment_count"].fillna(0) + feature["active_stage_count"].fillna(0) / 5
-    feature["sale_rent_gap_krw"] = feature["sale_price_krw"] - feature["deposit_price_krw"]
-    feature["age_proxy"] = year - feature["rent_build_year"].fillna(feature["sale_build_year"]).fillna(year)
-    feature["selected_area_min_pyeong"] = min_area_pyeong
-    feature["selected_area_max_pyeong"] = max_area_pyeong
-    feature["selected_area_min_m2"] = round(min_area_pyeong * 3.3058, 1)
-    feature["selected_area_max_m2"] = round(max_area_pyeong * 3.3058, 1)
-    feature = feature.sort_values(["housing_budget_fit", "infra_score_raw"], ascending=[False, False]).reset_index(drop=True)
+    feature = pd.DataFrame({"gu": SEOUL_GUS}).merge(housing_summary, on="gu", how="left").merge(district_metrics, on="gu", how="left")
+    feature = _add_common_derived_fields(feature, year, budget_cap, monthly_budget_cap, min_area_pyeong, max_area_pyeong)
+    feature = feature.sort_values(["housing_budget_fit", "deposit_price_krw"], ascending=[False, True]).reset_index(drop=True)
     return feature, {"memory_mb": round(feature.memory_usage(deep=True).sum() / 1024 / 1024, 2), "data_mode": "compact"}
 
 
@@ -282,43 +252,16 @@ def build_feature_table(
     infra_agg = _aggregate_infra(bundle)
     safety_agg = _aggregate_safety(bundle)
     redevelopment_agg = _aggregate_redevelopment(bundle)
-    yearly_avg = _aggregate_yearly_rent_for_area_range(bundle["yearly_rent"], min_area_pyeong, max_area_pyeong)
 
     feature = (
         pd.DataFrame({"gu": SEOUL_GUS})
         .merge(rent_agg.query("year == @year"), on="gu", how="left")
         .merge(sale_agg.query("year == @year"), on=["gu", "year"], how="left")
-        .merge(yearly_avg.query("year == @year"), on=["gu", "year"], how="left")
         .merge(infra_agg, on="gu", how="left")
         .merge(safety_agg, on="gu", how="left")
         .merge(redevelopment_agg, on="gu", how="left")
     )
-    feature["year"] = feature["year"].fillna(year).astype(int)
-    feature["budget_fit"] = ((feature["deposit_price_krw"].fillna(feature["deposit_price_krw"].median()) <= budget_cap)).astype(int)
-    feature["monthly_budget_fit"] = (
-        feature["monthly_rent_active_krw"]
-        .fillna(feature["monthly_rent_active_krw"].median())
-        .fillna(0)
-        .le(monthly_budget_cap)
-        .astype(int)
-    )
-    feature["housing_budget_fit"] = ((feature["budget_fit"] + feature["monthly_budget_fit"]) >= 2).astype(int)
-    feature["price_burden_index"] = feature["deposit_price_krw"].fillna(feature["deposit_price_krw"].median()) / max(budget_cap, 1)
-    feature["monthly_burden_index"] = (
-        feature["monthly_rent_active_krw"].fillna(feature["monthly_rent_active_krw"].median()).fillna(0) / max(monthly_budget_cap, 1)
-    )
-    feature["infra_score_raw"] = (
-        feature["hospital_count"].fillna(0) * 0.35
-        + feature["park_count"].fillna(0) * 12
-        + feature["mart_count"].fillna(0) * 60
-    )
-    feature["safety_score_raw"] = feature["police_satisfaction_score"].fillna(0) - feature["crime_total_count"].fillna(0) / 10
-    feature["redevelopment_score_raw"] = feature["redevelopment_count"].fillna(0) + feature["active_stage_count"].fillna(0) / 5
-    feature["sale_rent_gap_krw"] = feature["sale_price_krw"] - feature["deposit_price_krw"]
-    feature["age_proxy"] = year - feature["rent_build_year"].fillna(feature["sale_build_year"]).fillna(year)
-    feature["selected_area_min_pyeong"] = min_area_pyeong
-    feature["selected_area_max_pyeong"] = max_area_pyeong
-    feature["selected_area_min_m2"] = round(min_area_pyeong * 3.3058, 1)
-    feature["selected_area_max_m2"] = round(max_area_pyeong * 3.3058, 1)
-    feature = feature.sort_values(["housing_budget_fit", "infra_score_raw"], ascending=[False, False]).reset_index(drop=True)
-    return feature, {"memory_mb": round(feature.memory_usage(deep=True).sum() / 1024 / 1024, 2)}
+
+    feature = _add_common_derived_fields(feature, year, budget_cap, monthly_budget_cap, min_area_pyeong, max_area_pyeong)
+    feature = feature.sort_values(["housing_budget_fit", "deposit_price_krw"], ascending=[False, True]).reset_index(drop=True)
+    return feature, {"memory_mb": round(feature.memory_usage(deep=True).sum() / 1024 / 1024, 2), "data_mode": "raw"}

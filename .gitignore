@@ -14,3 +14,4 @@ streamlit*.log
 .idea/
 .DS_Store
 Thumbs.db
+ml_sale_price_model/

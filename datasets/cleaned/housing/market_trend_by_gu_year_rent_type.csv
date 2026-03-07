@@ -1,4 +1,4 @@
-﻿gu_std,year,rent_type,avg_deposit,avg_monthly_rent,tx_count
+﻿gu_std,year,rent_type,median_deposit,median_monthly_rent,tx_count
 강남구,2021,월세,30000.0,130.0,7815
 강남구,2021,전세,78750.0,0.0,9620
 강남구,2022,월세,27000.0,120.0,11308
