@@ -1,4 +1,3 @@
-@'
 __pycache__/
 *.py[cod]
 *.pyo
@@ -6,17 +5,12 @@ __pycache__/
 .venv/
 venv/
 env/
+.env
 
 *.log
-
-outputs/
-data_all/
-*.db
+streamlit*.log
 
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
-
-seoul_estate_eda.py
-'@ | Set-Content .gitignore -Encoding UTF8
