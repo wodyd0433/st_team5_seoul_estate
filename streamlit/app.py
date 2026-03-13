@@ -370,6 +370,20 @@ def _render_summary_tab(
             f"월소득 추정 {format_korean_money(persona_row['monthly_income_estimate_krw'])} | "
             f"부채 추정 {format_korean_money(persona_row['debt_balance_estimate_krw'])}"
         )
+        with st.expander("페르소나 분류 기준 및 출처", expanded=False):
+            st.markdown(
+                """
+                **분류 기준 (백분위수):**
+                - `소득 (서울시 연수입)`: **저** (P25: ~5,313만) / **중** (P50: ~7,576만) / **고** (P75: 1억 1,060만~)
+                - `부채 (전국 대출잔액)`: **저** (P25: ~8,538만) / **중** (P50: ~1억 7,970만) / **고** (P75: 2억 9,468만~)
+                
+                **데이터 출처:**
+                - `원천 데이터`: 통계청(kosis.kr) '신혼부부통계 (2022~2023)'
+                - `항목 상세`: 가구 구성별 소득/부채 구간 구성을 바탕으로 백분위수(Percentile) 추정
+                """
+            )
+
+
     st.caption(
         f"적용 가중치: 가격 {ui['weights_pct']['price']}% / 통근 {ui['weights_pct']['commute']}% / "
         f"인프라 {ui['weights_pct']['infra']}% / 치안 {ui['weights_pct']['safety']}% / 전세가율 {ui['weights_pct']['risk']}%"
