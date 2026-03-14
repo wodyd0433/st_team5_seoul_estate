@@ -1443,6 +1443,10 @@ def _build_raw_eda_inputs(bundle: dict[str, object], ui: dict[str, object]) -> t
 
     min_m2 = ui["min_area_pyeong"] * 3.3058
     max_m2 = ui["max_area_pyeong"] * 3.3058
+    rent_price = rent.loc[
+        pd.to_numeric(rent[rent_area_col], errors="coerce").between(min_m2, max_m2, inclusive="both")
+        & pd.to_numeric(rent["year"], errors="coerce").eq(2025)
+    ].copy()
     rent = rent.loc[
         pd.to_numeric(rent[rent_area_col], errors="coerce").between(min_m2, max_m2, inclusive="both")
         & pd.to_numeric(rent["year"], errors="coerce").eq(ui["selected_year"])
@@ -1474,13 +1478,30 @@ def _build_raw_eda_inputs(bundle: dict[str, object], ui: dict[str, object]) -> t
     else:
         commute_series = pd.to_numeric(primary_commute["avg_minutes"], errors="coerce")
 
-    infra_series = pd.Series([1.5] * len(hospital) + [2.0] * len(mart) + [1.0] * len(parks), dtype="float64")
+    infra_base = bundle["infra"][["gu", "hospital_count", "park_count", "mart_count"]].copy()
+    for column in ["hospital_count", "park_count", "mart_count"]:
+        infra_base[column] = pd.to_numeric(infra_base[column], errors="coerce").fillna(0)
+        col_min = float(infra_base[column].min()) if not infra_base.empty else 0.0
+        col_max = float(infra_base[column].max()) if not infra_base.empty else 0.0
+        if col_max > col_min:
+            infra_base[f"{column}_norm"] = (infra_base[column] - col_min) / (col_max - col_min)
+        else:
+            infra_base[f"{column}_norm"] = 0.0
+    infra_series = (
+        infra_base["hospital_count_norm"] + infra_base["park_count_norm"] + infra_base["mart_count_norm"]
+    )
+    crime_series = (
+        crime.assign(crime_count=pd.to_numeric(crime.get("crime_count"), errors="coerce"))
+        .groupby("gu", dropna=False)["crime_count"]
+        .sum(min_count=1)
+        .reset_index(drop=True)
+    )
 
     raw_series = {
-        "price": pd.to_numeric(rent[rent_deposit_col], errors="coerce"),
+        "price": pd.to_numeric(rent_price[rent_deposit_col], errors="coerce"),
         "commute": pd.to_numeric(commute_series, errors="coerce"),
         "infra": infra_series,
-        "safety": pd.to_numeric(crime.get("crime_count"), errors="coerce"),
+        "safety": pd.to_numeric(crime_series, errors="coerce"),
         "risk": pd.to_numeric(risk_series, errors="coerce"),
     }
     thresholds = {}
