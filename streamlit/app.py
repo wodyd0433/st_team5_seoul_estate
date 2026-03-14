@@ -9,8 +9,8 @@ import streamlit as st
 from src.config import DATA_DIR, DATA_DIR_CANDIDATES, PROJECT_ROOT, WORKPLACE_HUBS
 from src.feature_engineering import build_feature_table
 from src.io_utils import load_dataset_bundle
-from src.persona import build_persona_simulation
-from src.scoring_engine import FIXED_WEIGHTS, prepare_commute_frame, score_recommendations
+from src.persona import build_income_percentile_reference, build_persona_simulation
+from src.scoring_engine import prepare_commute_frame, score_recommendations
 from src.visualization import (
     build_recommendation_map,
     build_recommendation_summary,
@@ -32,6 +32,13 @@ AREA_BAND_OPTIONS = {
     "30평대": (30, 39),
     "40평대+": (40, 45),
 }
+WEIGHT_PRESET_OPTIONS = {
+    "균형 모드": {"price": 30, "commute": 25, "infra": 20, "safety": 15, "risk": 10},
+    "통근 최우선": {"price": 20, "commute": 40, "infra": 15, "safety": 15, "risk": 10},
+    "치안/안전 중심": {"price": 20, "commute": 20, "infra": 15, "safety": 35, "risk": 10},
+    "인프라 중심": {"price": 20, "commute": 20, "infra": 35, "safety": 15, "risk": 10},
+}
+WEIGHT_MODE_OPTIONS = [*WEIGHT_PRESET_OPTIONS.keys(), "상세 설정"]
 
 
 st.set_page_config(page_title=PAGE_TITLE, layout="wide", initial_sidebar_state="expanded")
@@ -66,20 +73,57 @@ def _read_markdown(path: Path) -> str:
 
 
 def _apply_persona_defaults(persona_row: pd.Series) -> None:
-    st.session_state["budget_cap"] = int(persona_row["deposit_budget_cap_krw"])
-    st.session_state["monthly_budget_cap"] = int(persona_row["monthly_budget_cap_krw"])
+    deposit_max = int(persona_row["deposit_budget_cap_krw"])
+    monthly_max = int(persona_row["monthly_budget_cap_krw"])
+    st.session_state["budget_cap_range"] = (max(100_000_000, int(deposit_max * 0.6)), deposit_max)
+    st.session_state["monthly_budget_range"] = (max(300_000, int(monthly_max * 0.6)), monthly_max)
 
 
 def _get_applied_weights() -> dict[str, int]:
     if "applied_weights_pct" not in st.session_state:
-        st.session_state["applied_weights_pct"] = {
-            "price": int(FIXED_WEIGHTS["price"] * 100),
-            "commute": int(FIXED_WEIGHTS["commute"] * 100),
-            "infra": int(FIXED_WEIGHTS["infra"] * 100),
-            "safety": int(FIXED_WEIGHTS["safety"] * 100),
-            "risk": int(FIXED_WEIGHTS["risk"] * 100),
-        }
+        st.session_state["weight_preset_name"] = "균형 모드"
+        st.session_state["last_weight_preset_name"] = "균형 모드"
+        st.session_state["applied_weights_pct"] = dict(WEIGHT_PRESET_OPTIONS["균형 모드"])
     return dict(st.session_state["applied_weights_pct"])
+
+
+def _sync_weight_preset(selected_mode: str) -> dict[str, int]:
+    applied_weights_pct = _get_applied_weights()
+    previous_mode = st.session_state.get("last_weight_preset_name")
+
+    if selected_mode != previous_mode and selected_mode in WEIGHT_PRESET_OPTIONS:
+        st.session_state["applied_weights_pct"] = dict(WEIGHT_PRESET_OPTIONS[selected_mode])
+        applied_weights_pct = dict(st.session_state["applied_weights_pct"])
+
+    st.session_state["weight_preset_name"] = selected_mode
+    st.session_state["last_weight_preset_name"] = selected_mode
+    return applied_weights_pct
+
+
+def _build_income_reference(bundle: dict[str, object]) -> dict[str, object] | None:
+    income_df = bundle.get("income_newlyweds")
+    if not isinstance(income_df, pd.DataFrame) or income_df.empty:
+        return None
+    try:
+        return build_income_percentile_reference(income_df, "서울특별시")
+    except Exception:
+        return None
+
+
+def _resolve_persona_income_band(persona_row: pd.Series | None, income_reference: dict[str, object] | None) -> str | None:
+    if persona_row is None or income_reference is None:
+        return None
+
+    annual_income = float(persona_row.get("monthly_income_estimate_krw", 0)) * 12
+    p25 = income_reference.get("p25_annual_krw")
+    p75 = income_reference.get("p75_annual_krw")
+    if pd.isna(p25) or pd.isna(p75):
+        return None
+    if annual_income <= p25:
+        return "저소득 (P0~P25)"
+    if annual_income < p75:
+        return "중간소득 (P25~P75)"
+    return "고소득 (P75~P100)"
 
 
 def _ensure_persona_state(persona_profiles: pd.DataFrame) -> pd.Series | None:
@@ -245,6 +289,9 @@ def _collect_sidebar_inputs(bundle: dict[str, object]) -> tuple[pd.Series | None
     persona_row = _ensure_persona_state(bundle.get("persona_profiles", pd.DataFrame()))
     available_years = _resolve_available_years(bundle)
     applied_weights_pct = _get_applied_weights()
+    st.session_state.setdefault("budget_cap_range", (400_000_000, 700_000_000))
+    st.session_state.setdefault("monthly_budget_range", (500_000, 1_000_000))
+    st.session_state.setdefault("weight_preset_name", "균형 모드")
 
     selected_year = st.sidebar.selectbox("기준 연도", available_years, index=0)
     household_type = st.sidebar.selectbox("가구 유형", HOUSEHOLD_OPTIONS, index=1)
@@ -267,22 +314,46 @@ def _collect_sidebar_inputs(bundle: dict[str, object]) -> tuple[pd.Series | None
         step=1,
     )
 
-    budget_cap = st.sidebar.slider("전세 보증금 예산", 100_000_000, 1_500_000_000, key="budget_cap", step=50_000_000)
-    monthly_budget_cap = st.sidebar.slider("월세 예산", 300_000, 4_000_000, key="monthly_budget_cap", step=100_000)
-    st.sidebar.caption(
-        f"선택 금액: 전세 {format_korean_money(budget_cap)} / 월세 {format_korean_money(monthly_budget_cap)}"
+    deposit_budget_min, deposit_budget_max = st.sidebar.slider(
+        "전세보증금 예산 구간",
+        100_000_000,
+        1_500_000_000,
+        key="budget_cap_range",
+        step=50_000_000,
     )
-    st.sidebar.markdown("#### 점수 가중치")
-    with st.sidebar.form("weight_form"):
-        price_weight = st.number_input("가격(%)", min_value=0, max_value=100, value=applied_weights_pct["price"], step=1)
-        commute_weight = st.number_input("통근(%)", min_value=0, max_value=100, value=applied_weights_pct["commute"], step=1)
-        infra_weight = st.number_input("인프라(%)", min_value=0, max_value=100, value=applied_weights_pct["infra"], step=1)
-        safety_weight = st.number_input("치안(%)", min_value=0, max_value=100, value=applied_weights_pct["safety"], step=1)
-        risk_weight = st.number_input("전세가율(%)", min_value=0, max_value=100, value=applied_weights_pct["risk"], step=1)
-        submitted = st.form_submit_button("가중치 확정", use_container_width=True)
+    monthly_budget_min, monthly_budget_max = st.sidebar.slider(
+        "월세 예산 구간",
+        300_000,
+        4_000_000,
+        key="monthly_budget_range",
+        step=100_000,
+    )
+    st.sidebar.caption(
+        "선택 구간: "
+        f"전세 {format_korean_money(deposit_budget_min)} ~ {format_korean_money(deposit_budget_max)} / "
+        f"월세 {format_korean_money(monthly_budget_min)} ~ {format_korean_money(monthly_budget_max)}"
+    )
+    st.sidebar.markdown("#### 가중치 설정")
+    selected_weight_mode = st.sidebar.selectbox("모드 선택", WEIGHT_MODE_OPTIONS, key="weight_preset_name")
+    applied_weights_pct = _sync_weight_preset(selected_weight_mode)
+
+    price_weight = applied_weights_pct["price"]
+    commute_weight = applied_weights_pct["commute"]
+    infra_weight = applied_weights_pct["infra"]
+    safety_weight = applied_weights_pct["safety"]
+    risk_weight = applied_weights_pct["risk"]
+    submitted = False
+    if selected_weight_mode == "상세 설정":
+        with st.sidebar.form("weight_form"):
+            price_weight = st.number_input("가격(%)", min_value=0, max_value=100, value=applied_weights_pct["price"], step=1)
+            commute_weight = st.number_input("통근(%)", min_value=0, max_value=100, value=applied_weights_pct["commute"], step=1)
+            infra_weight = st.number_input("인프라(%)", min_value=0, max_value=100, value=applied_weights_pct["infra"], step=1)
+            safety_weight = st.number_input("치안(%)", min_value=0, max_value=100, value=applied_weights_pct["safety"], step=1)
+            risk_weight = st.number_input("전세가율(%)", min_value=0, max_value=100, value=applied_weights_pct["risk"], step=1)
+            submitted = st.form_submit_button("상세 가중치 적용", use_container_width=True)
 
     pending_total = int(price_weight + commute_weight + infra_weight + safety_weight + risk_weight)
-    if submitted:
+    if selected_weight_mode == "상세 설정" and submitted:
         if pending_total == 100:
             st.session_state["applied_weights_pct"] = {
                 "price": int(price_weight),
@@ -310,12 +381,37 @@ def _collect_sidebar_inputs(bundle: dict[str, object]) -> tuple[pd.Series | None
         "max_area_pyeong": max_area_pyeong,
         "min_area_m2": round(min_area_pyeong * 3.3058, 1),
         "max_area_m2": round(max_area_pyeong * 3.3058, 1),
-        "budget_cap": budget_cap,
-        "monthly_budget_cap": monthly_budget_cap,
+        "deposit_budget_min_krw": deposit_budget_min,
+        "deposit_budget_max_krw": deposit_budget_max,
+        "monthly_budget_min_krw": monthly_budget_min,
+        "monthly_budget_max_krw": monthly_budget_max,
+        "budget_cap": deposit_budget_max,
+        "monthly_budget_cap": monthly_budget_max,
         "weights": {key: value / 100 for key, value in applied_weights_pct.items()},
         "weights_pct": applied_weights_pct,
+        "weight_mode": selected_weight_mode,
     }
     return persona_row, state
+
+
+def _filter_budget_ranges(feature_table: pd.DataFrame, ui: dict[str, object]) -> tuple[pd.DataFrame, str | None]:
+    deposit_mask = pd.to_numeric(feature_table["deposit_price_krw"], errors="coerce").between(
+        ui["deposit_budget_min_krw"],
+        ui["deposit_budget_max_krw"],
+        inclusive="both",
+    )
+    monthly_mask = pd.to_numeric(feature_table["monthly_rent_active_krw"], errors="coerce").between(
+        ui["monthly_budget_min_krw"],
+        ui["monthly_budget_max_krw"],
+        inclusive="both",
+    )
+    filtered = feature_table.loc[deposit_mask & monthly_mask].copy()
+    if filtered.empty:
+        return (
+            feature_table,
+            "선택한 전세보증금/월세 예산 구간에 정확히 맞는 자치구가 없어 전체 후보를 그대로 표시합니다.",
+        )
+    return filtered, None
 
 
 def _compute_outputs(bundle: dict[str, object], ui: dict[str, object]) -> dict[str, object]:
@@ -329,15 +425,16 @@ def _compute_outputs(bundle: dict[str, object], ui: dict[str, object]) -> dict[s
         min_area_pyeong=ui["min_area_pyeong"],
         max_area_pyeong=ui["max_area_pyeong"],
     )
+    filtered_feature_table, filter_notice = _filter_budget_ranges(feature_table, ui)
     commute_frame, commute_meta = prepare_commute_frame(
         ui["workplace_name"],
-        feature_table,
+        filtered_feature_table,
         bundle["commute_models"],
         household_type=ui["household_type"],
         secondary_workplace_name=ui["secondary_workplace_name"],
     )
     recommendations, scoring_meta = score_recommendations(
-        feature_table=feature_table,
+        feature_table=filtered_feature_table,
         selected_gus=[],
         commute_frame=commute_frame,
         weights=ui["weights"],
@@ -346,12 +443,13 @@ def _compute_outputs(bundle: dict[str, object], ui: dict[str, object]) -> dict[s
     )
 
     return {
-        "feature_table": feature_table,
+        "feature_table": filtered_feature_table,
         "feature_meta": feature_meta,
         "commute_frame": commute_frame,
         "commute_meta": commute_meta,
         "recommendations": recommendations,
         "scoring_meta": scoring_meta,
+        "filter_notice": filter_notice,
     }
 
 
@@ -362,24 +460,40 @@ def _render_summary_tab(
     rank_chart,
     persona_row: pd.Series | None,
     ui: dict[str, object],
+    income_reference: dict[str, object] | None,
+    filter_notice: str | None,
 ) -> None:
     st.markdown('<div class="section-title">추천 요약</div>', unsafe_allow_html=True)
+    if filter_notice:
+        st.info(filter_notice)
     if persona_row is not None:
+        persona_income_band = _resolve_persona_income_band(persona_row, income_reference)
         st.caption(
             f"선택 페르소나: {persona_row['persona_name']} | "
             f"월소득 추정 {format_korean_money(persona_row['monthly_income_estimate_krw'])} | "
             f"부채 추정 {format_korean_money(persona_row['debt_balance_estimate_krw'])}"
         )
+        if persona_income_band:
+            st.caption(f"소득 구간 판정: {persona_income_band}")
         with st.expander("페르소나 분류 기준 및 출처", expanded=False):
+            if income_reference is not None:
+                st.markdown(
+                    f"""
+                    **소득 구간 기준 (서울특별시, {income_reference['latest_year']}년 연소득 분포):**
+                    - `저소득`: {format_korean_money(income_reference['p25_annual_krw'])} 이하, `P0~P25`
+                    - `중간소득`: {format_korean_money(income_reference['p25_annual_krw'])} ~ {format_korean_money(income_reference['p75_annual_krw'])}, `P25~P75`
+                    - `고소득`: {format_korean_money(income_reference['p75_annual_krw'])} 이상, `P75~P100`
+
+                    **표시 기준:**
+                    - `저/중/고 금액`: 통계청 신혼부부 소득 구간 분포의 가중 percentile(P25, P75) 추정치
+                    - `페르소나 판정`: 페르소나 월소득 추정치를 연소득으로 환산해 위 percentile 구간에 매핑
+                    """
+                )
             st.markdown(
                 """
-                **분류 기준 (백분위수):**
-                - `소득 (서울시 연수입)`: **저** (P25: ~5,313만) / **중** (P50: ~7,576만) / **고** (P75: 1억 1,060만~)
-                - `부채 (전국 대출잔액)`: **저** (P25: ~8,538만) / **중** (P50: ~1억 7,970만) / **고** (P75: 2억 9,468만~)
-                
                 **데이터 출처:**
-                - `원천 데이터`: 통계청(kosis.kr) '신혼부부통계 (2022~2023)'
-                - `항목 상세`: 가구 구성별 소득/부채 구간 구성을 바탕으로 백분위수(Percentile) 추정
+                - `원천 데이터`: 통계청(kosis) 신혼부부통계 소득 분포
+                - `항목 상세`: 구간별 구성비를 사용한 가중 percentile 추정
                 """
             )
 
@@ -388,6 +502,14 @@ def _render_summary_tab(
         f"적용 가중치: 가격 {ui['weights_pct']['price']}% / 통근 {ui['weights_pct']['commute']}% / "
         f"인프라 {ui['weights_pct']['infra']}% / 치안 {ui['weights_pct']['safety']}% / 전세가율 {ui['weights_pct']['risk']}%"
     )
+    st.caption(
+        f"예산 구간: 전세 {format_korean_money(ui['deposit_budget_min_krw'])} ~ {format_korean_money(ui['deposit_budget_max_krw'])} / "
+        f"월세 {format_korean_money(ui['monthly_budget_min_krw'])} ~ {format_korean_money(ui['monthly_budget_max_krw'])}"
+    )
+
+    if recommendations.empty:
+        st.warning("현재 조건에 맞는 추천 결과가 없습니다.")
+        return
 
     top_cards = recommendations.head(5).copy()
     card_cols = st.columns(5)
@@ -417,7 +539,7 @@ def _render_summary_tab(
 
     left, right = st.columns([1.05, 1])
     with left:
-        st.plotly_chart(recommendation_map, width="stretch")
+        st.pydeck_chart(recommendation_map, width="stretch")
     with right:
         st.plotly_chart(rank_chart, width="stretch")
     st.dataframe(recommendation_summary, width="stretch", height=320)
@@ -425,6 +547,9 @@ def _render_summary_tab(
 
 def _render_compare_tab(recommendations: pd.DataFrame) -> None:
     st.markdown('<div class="section-title">구별 상세 비교</div>', unsafe_allow_html=True)
+    if recommendations.empty:
+        st.warning("현재 조건에 맞는 비교 대상이 없습니다.")
+        return
     compare_cols = [
         "gu",
         "total_score",
@@ -493,6 +618,9 @@ def _render_persona_tab(persona_row: pd.Series | None, persona_simulation: pd.Da
     if persona_row is None:
         st.info("페르소나 프로필 데이터가 없어 시뮬레이션을 표시할 수 없습니다.")
         return
+    if persona_simulation.empty:
+        st.warning("현재 조건에 맞는 시뮬레이션 대상이 없습니다.")
+        return
 
     metrics = st.columns(4)
     metrics[0].metric("월소득 추정", format_korean_money(persona_row["monthly_income_estimate_krw"]))
@@ -541,6 +669,9 @@ def _render_data_tab(
     scoring_lineage_md: str,
 ) -> None:
     st.markdown('<div class="section-title">데이터 근거</div>', unsafe_allow_html=True)
+    if feature_table.empty or recommendations.empty:
+        st.warning("현재 조건에 맞는 데이터가 없어 분포를 표시할 수 없습니다.")
+        return
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("전세 중앙값", format_korean_money(feature_table["deposit_price_krw"].median()))
     k2.metric("월세 중앙값", format_korean_money(feature_table["monthly_rent_active_krw"].median()))
@@ -582,6 +713,7 @@ def main() -> None:
     _show_intro(bundle)
     persona_row, ui = _collect_sidebar_inputs(bundle)
     outputs = _compute_outputs(bundle, ui)
+    income_reference = _build_income_reference(bundle)
 
     recommendations = outputs["recommendations"]
     feature_table = outputs["feature_table"]
@@ -621,6 +753,8 @@ def main() -> None:
             rank_chart,
             persona_row,
             ui,
+            income_reference,
+            outputs["filter_notice"],
         )
 
     with tabs[1]:

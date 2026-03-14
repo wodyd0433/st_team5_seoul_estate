@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 import pandas as pd
 
 
@@ -106,6 +107,48 @@ def summarize_income_distribution(df: pd.DataFrame, group_label: str = "전국")
         "weighted_annual_income_krw": weighted_annual_income_krw,
         "weighted_monthly_income_krw": weighted_annual_income_krw / 12 if pd.notna(weighted_annual_income_krw) else math.nan,
         "top_income_band": top_band,
+    }
+
+
+def _weighted_percentile(values: pd.Series, weights: pd.Series, percentile: float) -> float:
+    valid = values.notna() & weights.notna() & weights.gt(0)
+    if not valid.any():
+        return math.nan
+
+    sorted_frame = (
+        pd.DataFrame({"value": values.loc[valid].astype(float), "weight": weights.loc[valid].astype(float)})
+        .sort_values("value")
+        .reset_index(drop=True)
+    )
+    cumulative = sorted_frame["weight"].cumsum() / sorted_frame["weight"].sum()
+    idx = int(np.searchsorted(cumulative.to_numpy(), percentile, side="left"))
+    idx = min(idx, len(sorted_frame) - 1)
+    return float(sorted_frame.loc[idx, "value"])
+
+
+def build_income_percentile_reference(
+    income_df: pd.DataFrame,
+    group_label: str = "서울특별시",
+) -> dict[str, float | str]:
+    latest_year = int(pd.to_numeric(income_df["PRD_DE"], errors="coerce").max())
+    frame = income_df.loc[income_df["PRD_DE"].eq(latest_year) & income_df["C2_NM"].eq(group_label)].copy()
+    band_rows = frame.loc[frame["C1_NM"].map(_income_midpoint_annual_krw).notna()].copy()
+    band_rows["midpoint_annual_krw"] = band_rows["C1_NM"].map(_income_midpoint_annual_krw)
+    band_rows["DT"] = pd.to_numeric(band_rows["DT"], errors="coerce")
+
+    p25 = _weighted_percentile(band_rows["midpoint_annual_krw"], band_rows["DT"], 0.25)
+    p50 = _weighted_percentile(band_rows["midpoint_annual_krw"], band_rows["DT"], 0.50)
+    p75 = _weighted_percentile(band_rows["midpoint_annual_krw"], band_rows["DT"], 0.75)
+
+    return {
+        "group_label": group_label,
+        "latest_year": latest_year,
+        "p25_annual_krw": p25,
+        "p50_annual_krw": p50,
+        "p75_annual_krw": p75,
+        "p25_monthly_krw": p25 / 12 if pd.notna(p25) else math.nan,
+        "p50_monthly_krw": p50 / 12 if pd.notna(p50) else math.nan,
+        "p75_monthly_krw": p75 / 12 if pd.notna(p75) else math.nan,
     }
 
 

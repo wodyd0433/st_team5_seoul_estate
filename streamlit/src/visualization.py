@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import pydeck as pdk
 from plotly.subplots import make_subplots
 
 from src.config import GU_CENTERS, WORKPLACE_HUBS
@@ -251,83 +252,122 @@ def build_recommendation_map(
     recommendations: pd.DataFrame,
     workplace_name: str,
     secondary_workplace_name: str | None = None,
-) -> go.Figure:
+) -> pdk.Deck:
+    def _score_to_rgba(score: float | int | None, alpha: int) -> list[int]:
+        if score is None or pd.isna(score):
+            return [148, 163, 184, alpha]
+        normalized = max(0.0, min(float(score) / 100.0, 1.0))
+        return [
+            int(245 - normalized * 95),
+            int(120 + normalized * 70),
+            int(98 + normalized * 45),
+            alpha,
+        ]
+
     all_points = recommendations.copy()
     all_points["lat"] = all_points["gu"].map(lambda x: GU_CENTERS.get(x, {}).get("lat"))
     all_points["lon"] = all_points["gu"].map(lambda x: GU_CENTERS.get(x, {}).get("lon"))
     all_points = all_points.dropna(subset=["lat", "lon"])
+    all_points["fill_color"] = all_points["total_score"].map(lambda value: _score_to_rgba(value, 180))
+    all_points["deposit_label"] = all_points["deposit_price_krw"].map(format_korean_money)
+    all_points["monthly_label"] = all_points["monthly_rent_active_krw"].map(format_korean_money)
+    all_points["total_score"] = all_points["total_score"].round(1)
 
     top = recommendations.head(5).copy()
     top["lat"] = top["gu"].map(lambda x: GU_CENTERS.get(x, {}).get("lat"))
     top["lon"] = top["gu"].map(lambda x: GU_CENTERS.get(x, {}).get("lon"))
     top = top.dropna(subset=["lat", "lon"])
-
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scattermapbox(
-            lat=all_points["lat"],
-            lon=all_points["lon"],
-            mode="markers",
-            marker={"size": 14, "color": all_points["total_score"], "colorscale": "Viridis", "opacity": 0.45},
-            customdata=list(
-                zip(
-                    all_points["gu"],
-                    all_points["total_score"].round(1),
-                    all_points["total_grade"],
-                    all_points["deposit_price_krw"].map(format_korean_money),
-                    all_points["monthly_rent_active_krw"].map(format_korean_money),
-                )
-            ),
-            hovertemplate="<b>%{customdata[0]}</b><br>종합점수 %{customdata[1]}점<br>등급 %{customdata[2]}<br>전세 %{customdata[3]}<br>월세 %{customdata[4]}<extra></extra>",
-            showlegend=False,
-        )
-    )
-    fig.add_trace(
-        go.Scattermapbox(
-            lat=top["lat"],
-            lon=top["lon"],
-            mode="markers+text",
-            text=top["gu"],
-            textposition="top center",
-            marker={"size": 24, "color": "#f9c74f"},
-            hovertemplate="<b>%{text}</b><extra></extra>",
-            showlegend=False,
-        )
-    )
+    top["fill_color"] = [[255, 159, 28, 235] for _ in range(len(top))]
+    top["label"] = top["gu"]
 
     primary = WORKPLACE_HUBS[workplace_name]
-    fig.add_trace(
-        go.Scattermapbox(
-            lat=[primary["lat"]],
-            lon=[primary["lon"]],
-            mode="markers+text",
-            marker={"size": 18, "color": "#ff595e"},
-            text=[f"직장1: {primary['label']}"],
-            textposition="top right",
-            showlegend=False,
-        )
-    )
+    workplaces = [
+        {
+            "label": f"직장1: {primary['label']}",
+            "lat": primary["lat"],
+            "lon": primary["lon"],
+            "fill_color": [229, 57, 53, 240],
+        }
+    ]
 
     if secondary_workplace_name:
         secondary = WORKPLACE_HUBS[secondary_workplace_name]
-        fig.add_trace(
-            go.Scattermapbox(
-                lat=[secondary["lat"]],
-                lon=[secondary["lon"]],
-                mode="markers+text",
-                marker={"size": 18, "color": "#1982c4"},
-                text=[f"직장2: {secondary['label']}"],
-                textposition="top right",
-                showlegend=False,
-            )
+        workplaces.append(
+            {
+                "label": f"직장2: {secondary['label']}",
+                "lat": secondary["lat"],
+                "lon": secondary["lon"],
+                "fill_color": [25, 130, 196, 240],
+            }
         )
 
-    fig.update_layout(
-        title="추천 자치구 지도",
-        mapbox={"style": "carto-positron", "center": {"lat": 37.5665, "lon": 126.9780}, "zoom": 10},
-        margin={"l": 0, "r": 0, "t": 44, "b": 0},
+    layers = [
+        pdk.Layer(
+            "ScatterplotLayer",
+            data=all_points,
+            get_position="[lon, lat]",
+            get_radius=900,
+            get_fill_color="fill_color",
+            get_line_color=[255, 255, 255, 40],
+            line_width_min_pixels=1,
+            stroked=True,
+            pickable=True,
+        ),
+        pdk.Layer(
+            "ScatterplotLayer",
+            data=top,
+            get_position="[lon, lat]",
+            get_radius=1550,
+            get_fill_color="fill_color",
+            get_line_color=[255, 244, 214, 220],
+            line_width_min_pixels=2,
+            stroked=True,
+            pickable=True,
+        ),
+        pdk.Layer(
+            "TextLayer",
+            data=top,
+            get_position="[lon, lat]",
+            get_text="label",
+            get_size=14,
+            get_color=[33, 37, 41, 230],
+            get_alignment_baseline="'top'",
+            get_pixel_offset=[0, 18],
+        ),
+        pdk.Layer(
+            "ScatterplotLayer",
+            data=workplaces,
+            get_position="[lon, lat]",
+            get_radius=1850,
+            get_fill_color="fill_color",
+            get_line_color=[255, 255, 255, 220],
+            line_width_min_pixels=2,
+            stroked=True,
+            pickable=True,
+        ),
+        pdk.Layer(
+            "TextLayer",
+            data=workplaces,
+            get_position="[lon, lat]",
+            get_text="label",
+            get_size=14,
+            get_color=[34, 34, 34, 230],
+            get_alignment_baseline="'top'",
+            get_pixel_offset=[0, 18],
+        ),
+    ]
+
+    return pdk.Deck(
+        layers=layers,
+        initial_view_state=pdk.ViewState(latitude=37.5665, longitude=126.9780, zoom=10.2, pitch=0),
+        map_provider="carto",
+        map_style="road",
+        height=540,
+        tooltip={
+            "html": "<b>{gu}</b><br/>종합점수 {total_score}점<br/>등급 {total_grade}<br/>전세 {deposit_label}<br/>월세 {monthly_label}",
+            "style": {"backgroundColor": "rgba(15,23,42,0.92)", "color": "white"},
+        },
     )
-    return fig
 
 
 def build_top_rank_chart(recommendations: pd.DataFrame) -> go.Figure:
