@@ -59,6 +59,16 @@ st.markdown(
         font-weight: 800;
         margin: 0.25rem 0 1rem 0;
     }
+    .metric-badge {
+        display: inline-block;
+        padding: 0.12rem 0.42rem;
+        margin-right: 0.28rem;
+        border-radius: 0.4rem;
+        background: rgba(34, 197, 94, 0.18);
+        color: #86efac;
+        font-size: 0.86rem;
+        font-weight: 700;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -413,6 +423,61 @@ def _filter_budget_ranges(feature_table: pd.DataFrame, ui: dict[str, object]) ->
     return filtered, None
 
 
+def _render_scoring_thresholds_guide() -> None:
+    with st.expander("점수 산정 기준 및 Threshold", expanded=False):
+        st.markdown(
+            """
+            **0~100점 환산 방식:**
+
+            - 각 항목은 `5점 척도`로 먼저 평가한 뒤, `별점 x 20`으로 `0~100점`으로 환산합니다.
+            - 예: 5점=100점, 4점=80점, 3점=60점, 2점=40점, 1점=20점
+            """
+        )
+        st.markdown(
+            """
+            **항목별 Threshold:**
+
+            - <span class="metric-badge">가격 점수</span> 전세보증금 기준
+              3.5억 미만=100점, 5억 미만=80점, 7억 미만=60점, 9.5억 미만=40점, 그 외=20점
+            - <span class="metric-badge">통근 점수</span> 통근시간 기준
+              20분 이하=100점, 30분 이하=80점, 45분 이하=60점, 60분 이하=40점, 초과=20점
+            - <span class="metric-badge">인프라 점수</span> `마트*2 + 병원*1.5 + 공원` 지수 기준
+              3개 이상 마트+2개 이상 병원+공원 상위 30%=100점
+              2개 이상 마트+병원 상위 30%+공원 상위 30%=80점
+              1개 이상 마트+인프라지수 중앙값 이상=60점
+              인프라지수 하위 20% 초과=40점, 그 외=20점
+            - <span class="metric-badge">치안 점수</span> 범죄건수와 경찰만족도 기준
+              범죄 하위 10% 이내이면서 경찰만족도 상위 10%=100점
+              범죄 하위 25%=80점
+              범죄 하위 75%=60점
+              범죄 하위 90%=40점, 그 외=20점
+            - <span class="metric-badge">전세가율 점수</span> 전세가율 기준
+              50% 미만=100점, 60% 미만=80점, 70% 미만=60점, 80% 미만=40점, 그 외=20점
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            """
+            **종합점수 산정식:**
+
+            - `종합점수 = (가격별점×가중치 + 통근별점×가중치 + 인프라별점×가중치 + 치안별점×가중치 + 전세가율별점×가중치) × 20`
+            - 가중치는 사이드바 `가중치 설정`에서 선택한 프리셋 또는 상세 설정값을 그대로 사용합니다.
+            """
+        )
+        st.markdown(
+            """
+            **종합별점 / 등급 Threshold:**
+
+            - <span class="metric-badge">S / ★★★★★</span> 90점 이상, 강력 추천
+            - <span class="metric-badge">A / ★★★★☆</span> 75점 이상 90점 미만, 우수
+            - <span class="metric-badge">B / ★★★☆☆</span> 55점 이상 75점 미만, 무난
+            - <span class="metric-badge">C / ★★☆☆☆</span> 35점 이상 55점 미만, 주의
+            - <span class="metric-badge">D / ★☆☆☆☆</span> 35점 미만, 비추천
+            """,
+            unsafe_allow_html=True,
+        )
+
+
 def _compute_outputs(bundle: dict[str, object], ui: dict[str, object]) -> dict[str, object]:
     feature_table, feature_meta = build_feature_table(
         bundle=bundle,
@@ -549,6 +614,7 @@ def _render_compare_tab(recommendations: pd.DataFrame) -> None:
     if recommendations.empty:
         st.warning("현재 조건에 맞는 비교 대상이 없습니다.")
         return
+    _render_scoring_thresholds_guide()
     compare_cols = [
         "gu",
         "total_score",
