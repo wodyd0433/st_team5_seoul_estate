@@ -12,3 +12,5 @@
   `datasets/raw` CSV 인코딩을 감지하고 UTF-8 BOM 기준으로 정규화한다.
 - `csv_utils.py`
   CSV 인코딩 후보를 순차적으로 시도하는 공용 헬퍼다.
+- `collect_kosis_table.py`
+  KOSIS OpenAPI 표를 JSON으로 받아 `datasets/raw`용 CSV로 저장한다.

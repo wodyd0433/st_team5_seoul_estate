@@ -76,6 +76,7 @@ DATASET_PATHS = {
     "redevelopment": DATA_DIR / "seoul_redevelopment_projects_202512.csv",
     "income_newlyweds": DATA_DIR / "newlywed_income_by_region.csv",
     "debt_newlyweds": DATA_DIR / "newlywed_debt_by_region.csv",
+    "income_debt_distribution": DATA_DIR / "newlywed_income_debt_distribution.csv",
 }
 
 SEOUL_GUS = [

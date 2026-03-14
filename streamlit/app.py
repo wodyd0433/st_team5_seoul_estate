@@ -110,29 +110,23 @@ def _sync_weight_preset(selected_mode: str) -> dict[str, int]:
 
 
 def _build_income_reference(bundle: dict[str, object]) -> dict[str, object] | None:
-    income_df = bundle.get("income_newlyweds")
+    income_df = bundle.get("income_debt_distribution")
     if not isinstance(income_df, pd.DataFrame) or income_df.empty:
         return None
     try:
-        return build_income_percentile_reference(income_df, "서울특별시")
+        return build_income_percentile_reference(income_df)
     except Exception:
         return None
 
 
 def _resolve_persona_income_band(persona_row: pd.Series | None, income_reference: dict[str, object] | None) -> str | None:
-    if persona_row is None or income_reference is None:
+    if persona_row is None:
         return None
-
-    annual_income = float(persona_row.get("monthly_income_estimate_krw", 0)) * 12
-    p25 = income_reference.get("p25_annual_krw")
-    p75 = income_reference.get("p75_annual_krw")
-    if pd.isna(p25) or pd.isna(p75):
-        return None
-    if annual_income <= p25:
-        return "저소득 (P0~P25)"
-    if annual_income < p75:
-        return "중간소득 (P25~P75)"
-    return "고소득 (P75~P100)"
+    segment = persona_row.get("income_segment_label")
+    percentile = persona_row.get("income_percentile")
+    if pd.notna(segment) and pd.notna(percentile):
+        return f"{segment} (P{int(percentile)})"
+    return None
 
 
 def _ensure_persona_state(persona_profiles: pd.DataFrame) -> pd.Series | None:
@@ -538,26 +532,46 @@ def _render_summary_tab(
             f"부채 추정 {format_korean_money(persona_row['debt_balance_estimate_krw'])}"
         )
         if persona_income_band:
-            st.caption(f"소득 구간 판정: {persona_income_band}")
+            debt_segment_label = persona_row.get("debt_segment_label", "-")
+            debt_percentile = persona_row.get("debt_percentile")
+            debt_percentile_text = f"P{int(debt_percentile)}" if pd.notna(debt_percentile) else "-"
+            st.caption(
+                f"소득 구간 판정: {persona_income_band} / "
+                f"금융권 대출 구간 판정: {debt_segment_label} ({debt_percentile_text})"
+            )
         with st.expander("페르소나 분류 기준 및 출처", expanded=False):
             if income_reference is not None:
+                debt_p25 = persona_row.get("debt_p25_krw")
+                debt_p50 = persona_row.get("debt_p50_krw")
+                debt_p75 = persona_row.get("debt_p75_krw")
+                debt_p25_label = persona_row.get("debt_p25_label", "-")
+                debt_p50_label = persona_row.get("debt_p50_label", "-")
+                debt_p75_label = persona_row.get("debt_p75_label", "-")
+                income_segment_label = persona_row.get("income_segment_label", "-")
+                reference_year = persona_row.get("reference_year", income_reference["latest_year"])
                 st.markdown(
                     f"""
-                    **소득 구간 기준 (서울특별시, {income_reference['latest_year']}년 연소득 분포):**
-                    - `저소득`: {format_korean_money(income_reference['p25_annual_krw'])} 이하, `P0~P25`
-                    - `중간소득`: {format_korean_money(income_reference['p25_annual_krw'])} ~ {format_korean_money(income_reference['p75_annual_krw'])}, `P25~P75`
-                    - `고소득`: {format_korean_money(income_reference['p75_annual_krw'])} 이상, `P75~P100`
+                    **소득 구간 기준 (전국, {income_reference['latest_year']}년 연소득 분포):**
+                    - `저소득`: {format_korean_money(income_reference['p25_annual_krw'])}, `P25`, `{income_reference['p25_income_label']}`
+                    - `중간소득`: {format_korean_money(income_reference['p50_annual_krw'])}, `P50`, `{income_reference['p50_income_label']}`
+                    - `고소득`: {format_korean_money(income_reference['p75_annual_krw'])}, `P75`, `{income_reference['p75_income_label']}`
+
+                    **금융권 대출 기준 ({income_segment_label}, {reference_year}년):**
+                    - `저부채`: {format_korean_money(debt_p25)}, `P25`, `{debt_p25_label}`
+                    - `중간부채`: {format_korean_money(debt_p50)}, `P50`, `{debt_p50_label}`
+                    - `고부채`: {format_korean_money(debt_p75)}, `P75`, `{debt_p75_label}`
 
                     **표시 기준:**
-                    - `저/중/고 금액`: 통계청 신혼부부 소득 구간 분포의 가중 percentile(P25, P75) 추정치
-                    - `페르소나 판정`: 페르소나 월소득 추정치를 연소득으로 환산해 위 percentile 구간에 매핑
+                    - `소득 저/중/고`: `DT_1NW1036` 전체 소득 분포의 `P25 / P50 / P75` 대표값
+                    - `금융권 대출 저/중/고`: 선택된 소득구간 내부 금융권 대출 분포의 `P25 / P50 / P75` 대표값
+                    - `페르소나 판정`: 소득 percentile 3단계 x 해당 소득구간 내 금융권 대출 percentile 3단계 조합
                     """
                 )
             st.markdown(
                 """
                 **데이터 출처:**
-                - `원천 데이터`: 통계청(kosis) 신혼부부통계 소득 분포
-                - `항목 상세`: 구간별 구성비를 사용한 가중 percentile 추정
+                - `원천 데이터`: 통계청(kosis) `DT_1NW1036`
+                - `항목 상세`: 소득(근로·사업소득) 구간과 금융권 대출잔액 구간별 신혼부부 분포
                 """
             )
 

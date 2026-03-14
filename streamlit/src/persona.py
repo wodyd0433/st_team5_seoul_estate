@@ -7,12 +7,15 @@ import pandas as pd
 
 
 PERSONA_WEIGHT_PRESETS = {
-    "high_income_low_debt_dual": {"budget": 0.20, "commute": 0.35, "safety": 0.15, "infra": 0.30},
-    "high_income_high_debt_dual": {"budget": 0.30, "commute": 0.30, "safety": 0.15, "infra": 0.25},
-    "mid_income_low_debt_growth": {"budget": 0.30, "commute": 0.25, "safety": 0.15, "infra": 0.30},
-    "mid_income_high_debt_defense": {"budget": 0.40, "commute": 0.20, "safety": 0.20, "infra": 0.20},
-    "low_income_low_debt_stable": {"budget": 0.45, "commute": 0.20, "safety": 0.15, "infra": 0.20},
-    "low_income_high_debt_risk": {"budget": 0.50, "commute": 0.15, "safety": 0.20, "infra": 0.15},
+    "high_income_low_debt": {"budget": 0.20, "commute": 0.35, "safety": 0.15, "infra": 0.30},
+    "high_income_mid_debt": {"budget": 0.25, "commute": 0.30, "safety": 0.20, "infra": 0.25},
+    "high_income_high_debt": {"budget": 0.30, "commute": 0.28, "safety": 0.22, "infra": 0.20},
+    "mid_income_low_debt": {"budget": 0.30, "commute": 0.25, "safety": 0.20, "infra": 0.25},
+    "mid_income_mid_debt": {"budget": 0.35, "commute": 0.25, "safety": 0.20, "infra": 0.20},
+    "mid_income_high_debt": {"budget": 0.40, "commute": 0.20, "safety": 0.20, "infra": 0.20},
+    "low_income_low_debt": {"budget": 0.42, "commute": 0.20, "safety": 0.18, "infra": 0.20},
+    "low_income_mid_debt": {"budget": 0.47, "commute": 0.18, "safety": 0.20, "infra": 0.15},
+    "low_income_high_debt": {"budget": 0.52, "commute": 0.15, "safety": 0.20, "infra": 0.13},
 }
 
 
@@ -24,6 +27,12 @@ def _income_midpoint_annual_krw(label: str) -> float:
         "5000~7000만원 미만": 60_000_000,
         "7000~10000만원 미만": 85_000_000,
         "10000만원 이상": 120_000_000,
+        "1천만원 미만": 8_000_000,
+        "1천만원~3천만원 미만": 20_000_000,
+        "3천만원~5천만원 미만": 40_000_000,
+        "5천만원~7천만원 미만": 60_000_000,
+        "7천만원~1억원 미만": 85_000_000,
+        "1억원 이상": 120_000_000,
     }
     return mapping.get(str(label).strip(), math.nan)
 
@@ -40,6 +49,21 @@ def _debt_band_midpoint_krw(column_name: str) -> float:
         "debt_ge_300m_pct": 350_000_000,
     }
     return mapping.get(column_name, 0.0)
+
+
+def _debt_label_midpoint_krw(label: str) -> float:
+    mapping = {
+        "대출잔액 없음": 0.0,
+        "1천만원 미만": 5_000_000,
+        "1천만원~3천만원 미만": 20_000_000,
+        "3천만원~5천만원 미만": 40_000_000,
+        "5천만원~7천만원 미만": 60_000_000,
+        "7천만원~1억원 미만": 85_000_000,
+        "1억원~2억원 미만": 150_000_000,
+        "2억원~3억원 미만": 250_000_000,
+        "3억원 이상": 350_000_000,
+    }
+    return mapping.get(str(label).strip(), math.nan)
 
 
 def normalize_debt_newlyweds(df: pd.DataFrame) -> pd.DataFrame:
@@ -126,94 +150,185 @@ def _weighted_percentile(values: pd.Series, weights: pd.Series, percentile: floa
     return float(sorted_frame.loc[idx, "value"])
 
 
-def build_income_percentile_reference(
-    income_df: pd.DataFrame,
-    group_label: str = "서울특별시",
-) -> dict[str, float | str]:
-    latest_year = int(pd.to_numeric(income_df["PRD_DE"], errors="coerce").max())
-    frame = income_df.loc[income_df["PRD_DE"].eq(latest_year) & income_df["C2_NM"].eq(group_label)].copy()
-    band_rows = frame.loc[frame["C1_NM"].map(_income_midpoint_annual_krw).notna()].copy()
-    band_rows["midpoint_annual_krw"] = band_rows["C1_NM"].map(_income_midpoint_annual_krw)
-    band_rows["DT"] = pd.to_numeric(band_rows["DT"], errors="coerce")
+def _normalize_income_debt_distribution(df: pd.DataFrame) -> pd.DataFrame:
+    frame = df.copy()
+    frame["PRD_DE"] = pd.to_numeric(frame["PRD_DE"], errors="coerce")
+    frame["DT"] = pd.to_numeric(frame["DT"], errors="coerce")
+    frame["C1"] = pd.to_numeric(frame["C1"], errors="coerce")
+    frame["C2"] = pd.to_numeric(frame["C2"], errors="coerce")
+    latest_year = int(frame["PRD_DE"].max())
+    return frame.loc[frame["PRD_DE"].eq(latest_year)].copy()
 
-    p25 = _weighted_percentile(band_rows["midpoint_annual_krw"], band_rows["DT"], 0.25)
-    p50 = _weighted_percentile(band_rows["midpoint_annual_krw"], band_rows["DT"], 0.50)
-    p75 = _weighted_percentile(band_rows["midpoint_annual_krw"], band_rows["DT"], 0.75)
+
+def _weighted_percentile_label(frame: pd.DataFrame, value_col: str, percentile: float, label_col: str) -> tuple[float, str | None]:
+    valid = frame[value_col].notna() & frame["DT"].notna() & frame["DT"].gt(0)
+    if not valid.any():
+        return math.nan, None
+
+    sorted_frame = frame.loc[valid, [value_col, "DT", label_col]].sort_values(value_col).reset_index(drop=True)
+    cumulative = sorted_frame["DT"].cumsum() / sorted_frame["DT"].sum()
+    idx = int(np.searchsorted(cumulative.to_numpy(), percentile, side="left"))
+    idx = min(idx, len(sorted_frame) - 1)
+    row = sorted_frame.loc[idx]
+    return float(row[value_col]), row[label_col]
+
+
+def build_income_percentile_reference(income_debt_df: pd.DataFrame, group_label: str = "전국") -> dict[str, float | str]:
+    del group_label
+    frame = _normalize_income_debt_distribution(income_debt_df)
+    income_rows = frame.loc[frame["C2"].eq(0) & frame["C1"].gt(0)].copy()
+    income_rows["income_midpoint_annual_krw"] = income_rows["C1_NM"].map(_income_midpoint_annual_krw)
+
+    p25, p25_label = _weighted_percentile_label(income_rows, "income_midpoint_annual_krw", 0.25, "C1_NM")
+    p50, p50_label = _weighted_percentile_label(income_rows, "income_midpoint_annual_krw", 0.50, "C1_NM")
+    p75, p75_label = _weighted_percentile_label(income_rows, "income_midpoint_annual_krw", 0.75, "C1_NM")
 
     return {
-        "group_label": group_label,
-        "latest_year": latest_year,
+        "group_label": "전국",
+        "latest_year": int(frame["PRD_DE"].max()),
         "p25_annual_krw": p25,
         "p50_annual_krw": p50,
         "p75_annual_krw": p75,
         "p25_monthly_krw": p25 / 12 if pd.notna(p25) else math.nan,
         "p50_monthly_krw": p50 / 12 if pd.notna(p50) else math.nan,
         "p75_monthly_krw": p75 / 12 if pd.notna(p75) else math.nan,
+        "p25_income_label": p25_label,
+        "p50_income_label": p50_label,
+        "p75_income_label": p75_label,
     }
 
 
-def build_persona_profiles(income_df: pd.DataFrame, debt_df: pd.DataFrame) -> pd.DataFrame:
-    debt = normalize_debt_newlyweds(debt_df)
-    income_national = summarize_income_distribution(income_df, "전국")
-    income_seoul = summarize_income_distribution(income_df, "서울특별시")
-    base_income = income_seoul["weighted_monthly_income_krw"]
-    if pd.isna(base_income):
-        base_income = income_national["weighted_monthly_income_krw"]
+def build_debt_percentile_reference(income_debt_df: pd.DataFrame, income_label: str) -> dict[str, float | str]:
+    frame = _normalize_income_debt_distribution(income_debt_df)
+    debt_rows = frame.loc[frame["C1_NM"].eq(income_label) & frame["C2"].gt(0)].copy()
+    debt_rows["debt_midpoint_krw"] = debt_rows["C2_NM"].map(_debt_label_midpoint_krw)
 
-    debt_national = debt.loc[debt["feature_major"].eq("전국")].head(1)
-    if debt_national.empty:
-        debt_national = debt.head(1)
-    base_debt = float(debt_national["debt_median_krw"].iloc[0]) if not debt_national.empty else 150_000_000
+    p25, p25_label = _weighted_percentile_label(debt_rows, "debt_midpoint_krw", 0.25, "C2_NM")
+    p50, p50_label = _weighted_percentile_label(debt_rows, "debt_midpoint_krw", 0.50, "C2_NM")
+    p75, p75_label = _weighted_percentile_label(debt_rows, "debt_midpoint_krw", 0.75, "C2_NM")
 
-    persona_specs = [
-        ("high_income_low_debt_dual", "고소득 저부채 맞벌이", 1.35, 0.55, 0.28, 900_000_000, 1_200_000, "통근과 미래 매수 전환을 중시하는 유형"),
-        ("high_income_high_debt_dual", "고소득 고부채 맞벌이", 1.30, 1.35, 0.20, 850_000_000, 1_300_000, "소득은 높지만 기존 대출 부담을 관리해야 하는 유형"),
-        ("mid_income_low_debt_growth", "중간소득 저부채 성장형", 1.00, 0.70, 0.22, 700_000_000, 1_000_000, "현재 전세 거주 후 2~3년 내 매수 전환을 노리는 유형"),
-        ("mid_income_high_debt_defense", "중간소득 고부채 방어형", 0.95, 1.20, 0.14, 550_000_000, 800_000, "부채 방어와 월 부담 관리가 우선인 유형"),
-        ("low_income_low_debt_stable", "저소득 저부채 안정형", 0.72, 0.55, 0.12, 420_000_000, 600_000, "생활비와 통근 안정성을 우선하는 유형"),
-        ("low_income_high_debt_risk", "저소득 고부채 취약형", 0.68, 1.10, 0.06, 320_000_000, 450_000, "주거비와 금융부담을 가장 보수적으로 관리해야 하는 유형"),
+    return {
+        "latest_year": int(frame["PRD_DE"].max()),
+        "income_label": income_label,
+        "p25_krw": p25,
+        "p50_krw": p50,
+        "p75_krw": p75,
+        "p25_label": p25_label,
+        "p50_label": p50_label,
+        "p75_label": p75_label,
+    }
+
+
+def _build_budget_caps(monthly_income: float, income_key: str, debt_key: str) -> tuple[int, int]:
+    deposit_months = {"low_income": 110, "mid_income": 105, "high_income": 120}[income_key]
+    debt_adjustment = {"low_debt": 1.00, "mid_debt": 0.90, "high_debt": 0.80}[debt_key]
+    monthly_ratio = {"low_income": 0.18, "mid_income": 0.20, "high_income": 0.22}[income_key]
+    rent_adjustment = {"low_debt": 1.00, "mid_debt": 0.92, "high_debt": 0.84}[debt_key]
+
+    deposit_budget = int(min(max(monthly_income * deposit_months * debt_adjustment, 250_000_000), 1_200_000_000))
+    monthly_budget = int(min(max(monthly_income * monthly_ratio * rent_adjustment, 450_000), 1_800_000))
+    return deposit_budget, monthly_budget
+
+
+def _build_saving_profile(monthly_income: float, debt_balance: float, income_label: str, debt_label: str) -> tuple[float, float, float]:
+    saving_rate = {
+        "저소득": {"저부채": 0.14, "중간부채": 0.10, "고부채": 0.07},
+        "중간소득": {"저부채": 0.20, "중간부채": 0.16, "고부채": 0.12},
+        "고소득": {"저부채": 0.26, "중간부채": 0.22, "고부채": 0.18},
+    }[income_label][debt_label]
+    living_cost_ratio = {"저소득": 0.62, "중간소득": 0.58, "고소득": 0.52}[income_label]
+    seed_factor = {"저소득": 1.8, "중간소득": 2.4, "고소득": 3.2}[income_label]
+
+    monthly_debt_service = debt_balance * 0.0045
+    monthly_living_cost = monthly_income * living_cost_ratio
+    monthly_saving = max(monthly_income * saving_rate - monthly_debt_service, monthly_income * 0.04)
+    current_seed = monthly_income * seed_factor
+    return monthly_debt_service, monthly_living_cost, max(monthly_saving, 0.0), current_seed
+
+
+def build_persona_profiles(income_debt_df: pd.DataFrame) -> pd.DataFrame:
+    income_reference = build_income_percentile_reference(income_debt_df)
+    income_specs = [
+        ("high_income", "고소득", 75, income_reference["p75_annual_krw"], income_reference["p75_income_label"]),
+        ("mid_income", "중간소득", 50, income_reference["p50_annual_krw"], income_reference["p50_income_label"]),
+        ("low_income", "저소득", 25, income_reference["p25_annual_krw"], income_reference["p25_income_label"]),
+    ]
+    debt_specs = [
+        ("high_debt", "고부채", 75, "p75_krw", "p75_label"),
+        ("mid_debt", "중간부채", 50, "p50_krw", "p50_label"),
+        ("low_debt", "저부채", 25, "p25_krw", "p25_label"),
     ]
 
     rows: list[dict[str, object]] = []
-    for key, name, income_multiplier, debt_multiplier, saving_rate, deposit_budget, monthly_budget, summary in persona_specs:
-        monthly_income = float(base_income) * income_multiplier
-        debt_balance = base_debt * debt_multiplier
-        monthly_debt_service = debt_balance * 0.0045
-        monthly_living_cost = monthly_income * (0.52 if "고소득" in name else 0.58 if "중간소득" in name else 0.62)
-        monthly_saving = max(monthly_income * saving_rate - monthly_debt_service, monthly_income * 0.04)
-        current_seed = monthly_income * (3.2 if "고소득" in name else 2.4 if "중간소득" in name else 1.8)
-        seed_money_2y = current_seed + monthly_saving * 24
-        seed_money_3y = current_seed + monthly_saving * 36
-        additional_loan_capacity = max(monthly_income * 36 - debt_balance * 0.35, 0)
-        buying_power_2y = seed_money_2y + additional_loan_capacity
-        buying_power_3y = seed_money_3y + additional_loan_capacity
-        weights = PERSONA_WEIGHT_PRESETS[key]
-        rows.append(
-            {
-                "persona_key": key,
-                "persona_name": name,
-                "persona_summary": summary,
-                "income_basis": income_seoul["group_label"] if pd.notna(income_seoul["weighted_monthly_income_krw"]) else income_national["group_label"],
-                "income_top_band": income_seoul["top_income_band"] if pd.notna(income_seoul["weighted_monthly_income_krw"]) else income_national["top_income_band"],
-                "monthly_income_estimate_krw": round(monthly_income),
-                "debt_basis": "전국",
-                "debt_balance_estimate_krw": round(debt_balance),
-                "monthly_debt_service_estimate_krw": round(monthly_debt_service),
-                "monthly_living_cost_estimate_krw": round(monthly_living_cost),
-                "monthly_saving_estimate_krw": round(monthly_saving),
-                "current_seed_estimate_krw": round(current_seed),
-                "seed_money_2y_krw": round(seed_money_2y),
-                "seed_money_3y_krw": round(seed_money_3y),
-                "buying_power_2y_krw": round(buying_power_2y),
-                "buying_power_3y_krw": round(buying_power_3y),
-                "deposit_budget_cap_krw": int(deposit_budget),
-                "monthly_budget_cap_krw": int(monthly_budget),
-                "weight_budget": weights["budget"],
-                "weight_commute": weights["commute"],
-                "weight_safety": weights["safety"],
-                "weight_infra": weights["infra"],
-            }
-        )
+    latest_year = int(income_reference["latest_year"])
+    for income_key, income_label, income_percentile, annual_income, income_source_label in income_specs:
+        monthly_income = float(annual_income) / 12 if pd.notna(annual_income) else math.nan
+        debt_reference = build_debt_percentile_reference(income_debt_df, str(income_source_label))
+
+        for debt_key, debt_label, debt_percentile, debt_value_key, debt_label_key in debt_specs:
+            debt_balance = float(debt_reference[debt_value_key])
+            monthly_debt_service, monthly_living_cost, monthly_saving, current_seed = _build_saving_profile(
+                monthly_income,
+                debt_balance,
+                income_label,
+                debt_label,
+            )
+            seed_money_2y = current_seed + monthly_saving * 24
+            seed_money_3y = current_seed + monthly_saving * 36
+            additional_loan_capacity = max(monthly_income * 36 - debt_balance * 0.35, 0)
+            buying_power_2y = seed_money_2y + additional_loan_capacity
+            buying_power_3y = seed_money_3y + additional_loan_capacity
+            deposit_budget, monthly_budget = _build_budget_caps(monthly_income, income_key, debt_key)
+            weights = PERSONA_WEIGHT_PRESETS[f"{income_key}_{debt_key}"]
+
+            rows.append(
+                {
+                    "persona_key": f"{income_key}_{debt_key}",
+                    "persona_name": f"{income_label} {debt_label}",
+                    "persona_summary": (
+                        f"{latest_year}년 기준 소득 P{income_percentile}와 해당 소득구간 내 금융권 대출 P{debt_percentile}를 반영한 유형"
+                    ),
+                    "income_basis": "전국 신혼부부 소득 분포",
+                    "income_top_band": income_source_label,
+                    "income_segment_label": income_label,
+                    "income_percentile": income_percentile,
+                    "income_source_label": income_source_label,
+                    "monthly_income_estimate_krw": round(monthly_income),
+                    "annual_income_estimate_krw": round(annual_income),
+                    "debt_basis": f"{income_source_label} 소득구간 내 금융권 대출 분포",
+                    "debt_segment_label": debt_label,
+                    "debt_percentile": debt_percentile,
+                    "debt_source_label": debt_reference[debt_label_key],
+                    "debt_balance_estimate_krw": round(debt_balance),
+                    "monthly_debt_service_estimate_krw": round(monthly_debt_service),
+                    "monthly_living_cost_estimate_krw": round(monthly_living_cost),
+                    "monthly_saving_estimate_krw": round(monthly_saving),
+                    "current_seed_estimate_krw": round(current_seed),
+                    "seed_money_2y_krw": round(seed_money_2y),
+                    "seed_money_3y_krw": round(seed_money_3y),
+                    "buying_power_2y_krw": round(buying_power_2y),
+                    "buying_power_3y_krw": round(buying_power_3y),
+                    "deposit_budget_cap_krw": int(deposit_budget),
+                    "monthly_budget_cap_krw": int(monthly_budget),
+                    "income_p25_annual_krw": income_reference["p25_annual_krw"],
+                    "income_p50_annual_krw": income_reference["p50_annual_krw"],
+                    "income_p75_annual_krw": income_reference["p75_annual_krw"],
+                    "income_p25_label": income_reference["p25_income_label"],
+                    "income_p50_label": income_reference["p50_income_label"],
+                    "income_p75_label": income_reference["p75_income_label"],
+                    "debt_p25_krw": debt_reference["p25_krw"],
+                    "debt_p50_krw": debt_reference["p50_krw"],
+                    "debt_p75_krw": debt_reference["p75_krw"],
+                    "debt_p25_label": debt_reference["p25_label"],
+                    "debt_p50_label": debt_reference["p50_label"],
+                    "debt_p75_label": debt_reference["p75_label"],
+                    "reference_year": latest_year,
+                    "weight_budget": weights["budget"],
+                    "weight_commute": weights["commute"],
+                    "weight_safety": weights["safety"],
+                    "weight_infra": weights["infra"],
+                }
+            )
     return pd.DataFrame(rows)
 
 

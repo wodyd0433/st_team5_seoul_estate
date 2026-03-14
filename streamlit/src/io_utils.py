@@ -293,6 +293,7 @@ def load_dataset_bundle() -> dict[str, object]:
     redevelopment = _reshape_redevelopment(_load_redevelopment(DATASET_PATHS["redevelopment"]))
     income_newlyweds = _read_csv_with_fallback(DATASET_PATHS["income_newlyweds"])
     debt_newlyweds = _load_debt_newlyweds(DATASET_PATHS["debt_newlyweds"])
+    income_debt_distribution = _read_csv_with_fallback(DATASET_PATHS["income_debt_distribution"])
     commute_zone_frames = _load_commute_zone_frames()
     commute_models = _fit_commute_models(commute_zone_frames)
 
@@ -321,7 +322,7 @@ def load_dataset_bundle() -> dict[str, object]:
 
     park_stats = _build_park_stats(parks)
     infra = _build_infra_summary(hospital, park_stats, mart)
-    persona_profiles = build_persona_profiles(income_newlyweds, debt_newlyweds)
+    persona_profiles = build_persona_profiles(income_debt_distribution)
 
     rent, rent_unit_report = standardize_price_columns(rent, ["보증금_만원", "월세_만원"])
     sale, sale_unit_report = standardize_price_columns(sale, ["dealAmount"])
@@ -347,6 +348,7 @@ def load_dataset_bundle() -> dict[str, object]:
         "commute_models": commute_models,
         "income_newlyweds": income_newlyweds,
         "debt_newlyweds": debt_newlyweds,
+        "income_debt_distribution": income_debt_distribution,
         "persona_profiles": persona_profiles,
         "raw_frames": {
             "apt_deal": sale,
@@ -361,6 +363,7 @@ def load_dataset_bundle() -> dict[str, object]:
             "redevelopment": redevelopment,
             "income_newlyweds": income_newlyweds,
             "debt_newlyweds": debt_newlyweds,
+            "income_debt_distribution": income_debt_distribution,
             "persona_profiles": persona_profiles,
             **{f"commute_{k}": v for k, v in commute_zone_frames.items()},
         },
