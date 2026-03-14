@@ -81,7 +81,7 @@ def _apply_persona_defaults(persona_row: pd.Series) -> None:
 
 def _get_applied_weights() -> dict[str, int]:
     if "applied_weights_pct" not in st.session_state:
-        st.session_state["weight_preset_name"] = "균형 모드"
+        st.session_state["weight_mode_select"] = "균형 모드"
         st.session_state["last_weight_preset_name"] = "균형 모드"
         st.session_state["applied_weights_pct"] = dict(WEIGHT_PRESET_OPTIONS["균형 모드"])
     return dict(st.session_state["applied_weights_pct"])
@@ -95,7 +95,6 @@ def _sync_weight_preset(selected_mode: str) -> dict[str, int]:
         st.session_state["applied_weights_pct"] = dict(WEIGHT_PRESET_OPTIONS[selected_mode])
         applied_weights_pct = dict(st.session_state["applied_weights_pct"])
 
-    st.session_state["weight_preset_name"] = selected_mode
     st.session_state["last_weight_preset_name"] = selected_mode
     return applied_weights_pct
 
@@ -291,7 +290,7 @@ def _collect_sidebar_inputs(bundle: dict[str, object]) -> tuple[pd.Series | None
     applied_weights_pct = _get_applied_weights()
     st.session_state.setdefault("budget_cap_range", (400_000_000, 700_000_000))
     st.session_state.setdefault("monthly_budget_range", (500_000, 1_000_000))
-    st.session_state.setdefault("weight_preset_name", "균형 모드")
+    st.session_state.setdefault("weight_mode_select", "균형 모드")
 
     selected_year = st.sidebar.selectbox("기준 연도", available_years, index=0)
     household_type = st.sidebar.selectbox("가구 유형", HOUSEHOLD_OPTIONS, index=1)
@@ -334,7 +333,7 @@ def _collect_sidebar_inputs(bundle: dict[str, object]) -> tuple[pd.Series | None
         f"월세 {format_korean_money(monthly_budget_min)} ~ {format_korean_money(monthly_budget_max)}"
     )
     st.sidebar.markdown("#### 가중치 설정")
-    selected_weight_mode = st.sidebar.selectbox("모드 선택", WEIGHT_MODE_OPTIONS, key="weight_preset_name")
+    selected_weight_mode = st.sidebar.selectbox("모드 선택", WEIGHT_MODE_OPTIONS, key="weight_mode_select")
     applied_weights_pct = _sync_weight_preset(selected_weight_mode)
 
     price_weight = applied_weights_pct["price"]
