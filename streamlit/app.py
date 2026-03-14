@@ -6,6 +6,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from src.cleaning import remove_iqr_outliers
 from src.config import DATA_DIR, DATA_DIR_CANDIDATES, PROJECT_ROOT, WORKPLACE_HUBS
 from src.feature_engineering import build_feature_table
 from src.io_utils import load_dataset_bundle
@@ -624,6 +625,7 @@ def _render_scoring_thresholds_guide() -> None:
 
 
 def _compute_outputs(bundle: dict[str, object], ui: dict[str, object]) -> dict[str, object]:
+    raw_eda_series, raw_thresholds = _build_raw_eda_inputs(bundle, ui)
     feature_table, feature_meta = build_feature_table(
         bundle=bundle,
         year=ui["selected_year"],
@@ -648,6 +650,7 @@ def _compute_outputs(bundle: dict[str, object], ui: dict[str, object]) -> dict[s
         selected_gus=[],
         commute_frame=commute_frame,
         weights=ui["weights"],
+        threshold_overrides=raw_thresholds,
         missing_strategy="mean",
         household_type=ui["household_type"],
     )
@@ -659,8 +662,86 @@ def _compute_outputs(bundle: dict[str, object], ui: dict[str, object]) -> dict[s
         "commute_meta": commute_meta,
         "recommendations": recommendations,
         "scoring_meta": scoring_meta,
+        "raw_eda_series": raw_eda_series,
         "filter_notice": filter_notice,
     }
+
+
+def _build_raw_eda_inputs(bundle: dict[str, object], ui: dict[str, object]) -> tuple[dict[str, pd.Series], dict[str, dict[str, float]]]:
+    rent = bundle["rent"].copy()
+    sale = bundle["sale"].copy()
+    crime = bundle["crime"].copy()
+    commute_timeseries = bundle.get("commute_timeseries", pd.DataFrame()).copy()
+    hospital = bundle["hospital"].copy()
+    mart = bundle["mart"].copy()
+    parks = bundle["parks"].copy()
+
+    rent["year"] = pd.to_numeric(rent["전월"], errors="coerce")
+    rent["year"] = pd.to_numeric(rent["전월"].astype(str).str[:4], errors="coerce")
+    sale["dealYear"] = pd.to_numeric(sale["dealYear"], errors="coerce")
+    rent = remove_iqr_outliers(rent, ["보증금_만원_krw", "월세_만원_krw", "전용면적_m2"])
+    sale = remove_iqr_outliers(sale, ["dealAmount_krw", "excluUseAr"])
+
+    min_m2 = ui["min_area_pyeong"] * 3.3058
+    max_m2 = ui["max_area_pyeong"] * 3.3058
+    rent = rent.loc[
+        pd.to_numeric(rent["전용면적_m2"], errors="coerce").between(min_m2, max_m2, inclusive="both")
+        & pd.to_numeric(rent["year"], errors="coerce").eq(ui["selected_year"])
+    ].copy()
+    sale = sale.loc[
+        pd.to_numeric(sale["excluUseAr"], errors="coerce").between(min_m2, max_m2, inclusive="both")
+        & pd.to_numeric(sale["dealYear"], errors="coerce").eq(ui["selected_year"])
+    ].copy()
+
+    sale_gu_median = sale.groupby("gu", as_index=False)["dealAmount_krw"].median().rename(columns={"dealAmount_krw": "sale_median_krw"})
+    rent_with_sale = rent.merge(sale_gu_median, on="gu", how="left")
+    risk_series = (
+        pd.to_numeric(rent_with_sale["보증금_만원_krw"], errors="coerce")
+        / pd.to_numeric(rent_with_sale["sale_median_krw"], errors="coerce").replace(0, pd.NA)
+        * 100
+    )
+
+    primary_commute = commute_timeseries.loc[commute_timeseries["hub_name"].eq(ui["workplace_name"])].copy()
+    if ui.get("secondary_workplace_name"):
+        secondary_commute = commute_timeseries.loc[
+            commute_timeseries["hub_name"].eq(ui["secondary_workplace_name"])
+        ].copy()
+        commute_source = primary_commute.merge(
+            secondary_commute[["gu", "time_order", "avg_minutes"]].rename(columns={"avg_minutes": "secondary_avg_minutes"}),
+            on=["gu", "time_order"],
+            how="inner",
+        )
+        commute_series = commute_source["avg_minutes"] * 0.55 + commute_source["secondary_avg_minutes"] * 0.45
+    else:
+        commute_series = pd.to_numeric(primary_commute["avg_minutes"], errors="coerce")
+
+    infra_series = pd.Series(
+        [1.5] * len(hospital) + [2.0] * len(mart) + [1.0] * len(parks),
+        dtype="float64",
+        name="infra_raw_points",
+    )
+
+    raw_series = {
+        "price": pd.to_numeric(rent["보증금_만원_krw"], errors="coerce"),
+        "commute": pd.to_numeric(commute_series, errors="coerce"),
+        "infra": infra_series,
+        "safety": pd.to_numeric(crime.get("crime_count"), errors="coerce"),
+        "risk": pd.to_numeric(risk_series, errors="coerce"),
+    }
+    thresholds = {}
+    for metric_name, series in raw_series.items():
+        clean = pd.to_numeric(series, errors="coerce").dropna()
+        mean = float(clean.mean()) if not clean.empty else 0.0
+        std = float(clean.std(ddof=0)) if not clean.empty else 0.0
+        thresholds[metric_name] = {
+            "mean": mean,
+            "std": std,
+            "lower_1_5_std": mean - 1.5 * std,
+            "lower_0_5_std": mean - 0.5 * std,
+            "upper_0_5_std": mean + 0.5 * std,
+            "upper_1_5_std": mean + 1.5 * std,
+        }
+    return raw_series, thresholds
 
 
 def _render_summary_tab(
@@ -1119,6 +1200,7 @@ def _build_eda_threshold_table(scoring_meta: dict[str, object]) -> pd.DataFrame:
 
 def _render_eda_tab(
     recommendations: pd.DataFrame,
+    raw_eda_series: dict[str, pd.Series],
     scoring_meta: dict[str, object],
     persona_row: pd.Series | None,
     income_reference: dict[str, object] | None,
@@ -1153,22 +1235,20 @@ def _render_eda_tab(
     st.dataframe(styled_thresholds, width="stretch", height=240)
 
     metric_defs = [
-        ("가격(전세)", "deposit_price_krw"),
-        ("통근", "commute_minutes"),
-        ("인프라", "infra_index"),
-        ("치안(범죄건수)", "crime_total_count"),
-        ("전세가율", "jeonse_ratio_pct"),
+        ("가격(전세)", "price"),
+        ("통근", "commute"),
+        ("인프라", "infra"),
+        ("치안(범죄건수)", "safety"),
+        ("전세가율", "risk"),
     ]
     chart_cols = st.columns(2)
-    for idx, (label, column) in enumerate(metric_defs):
-        view = recommendations[["gu", column]].copy()
-        view[column] = pd.to_numeric(view[column], errors="coerce")
-        view = view.dropna(subset=[column])
-        if view.empty:
+    metric_keys = ["price", "commute", "infra", "safety", "risk"]
+    for idx, (label, metric_key) in enumerate(metric_defs):
+        series = pd.to_numeric(raw_eda_series.get(metric_key), errors="coerce").dropna()
+        if series.empty:
             continue
-        metric_key = ["price", "commute", "infra", "safety", "risk"][idx]
         metric_meta = scoring_meta.get("thresholds", {}).get(metric_key, {}) if isinstance(scoring_meta, dict) else {}
-        fig = px.histogram(view, x=column, nbins=20, title=f"{label} 분포")
+        fig = px.histogram(x=series, nbins=20, title=f"{label} 원본 분포")
         for threshold_key, color in [
             ("lower_1_5_std", "#22c55e"),
             ("lower_0_5_std", "#84cc16"),
@@ -1388,7 +1468,13 @@ def main() -> None:
         _render_landing_tab()
 
     with tabs[1]:
-        _render_eda_tab(recommendations, outputs["scoring_meta"], persona_row, income_reference)
+        _render_eda_tab(
+            recommendations,
+            outputs["raw_eda_series"],
+            outputs["scoring_meta"],
+            persona_row,
+            income_reference,
+        )
 
     with tabs[2]:
         _render_summary_tab(

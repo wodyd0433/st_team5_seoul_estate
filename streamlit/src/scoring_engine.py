@@ -168,6 +168,7 @@ def score_recommendations(
     selected_gus: list[str],
     commute_frame: pd.DataFrame,
     weights: dict[str, float] | None = None,
+    threshold_overrides: dict[str, dict[str, float | str | bool]] | None = None,
     scaling_method: str | None = None,
     missing_strategy: str = "mean",
     score_formula: str | None = None,
@@ -195,6 +196,10 @@ def score_recommendations(
     threshold_meta: dict[str, dict[str, float | str | bool]] = {}
     for metric_name, spec in metric_specs.items():
         thresholds = _build_std_thresholds(spec["series"])
+        override = (threshold_overrides or {}).get(metric_name, {})
+        for key in ["mean", "std", "lower_1_5_std", "lower_0_5_std", "upper_0_5_std", "upper_1_5_std"]:
+            if key in override and pd.notna(override[key]):
+                thresholds[key] = float(override[key])
         threshold_meta[metric_name] = {
             **thresholds,
             "higher_is_better": spec["higher_is_better"],
