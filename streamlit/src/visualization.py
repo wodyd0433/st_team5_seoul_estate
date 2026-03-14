@@ -219,6 +219,14 @@ def build_commute_timeseries_chart(frame: pd.DataFrame, destination_name: str) -
         fig.update_layout(title=f"{destination_name} 시간대별 구단위 평균 소요시간")
         return _apply_common_layout(fig)
 
+    view = view.sort_values(["gu", "time_order"]).reset_index(drop=True)
+    ordered_labels = (
+        view[["time_order", "time_label"]]
+        .drop_duplicates()
+        .sort_values("time_order")["time_label"]
+        .tolist()
+    )
+
     fig = px.line(
         view,
         x="time_label",
@@ -229,7 +237,7 @@ def build_commute_timeseries_chart(frame: pd.DataFrame, destination_name: str) -
         labels={"time_label": "시간", "avg_minutes": "평균 소요시간(분)", "gu": "자치구"},
     )
     fig.update_traces(mode="lines+markers")
-    fig.update_xaxes(categoryorder="array", categoryarray=view["time_label"].drop_duplicates().tolist())
+    fig.update_xaxes(categoryorder="array", categoryarray=ordered_labels)
     fig.update_yaxes(ticksuffix="분")
     return _apply_common_layout(fig)
 
