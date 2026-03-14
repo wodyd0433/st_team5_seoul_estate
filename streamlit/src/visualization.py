@@ -172,25 +172,35 @@ def build_visualization_gallery(
     )
     figs["score_stacked_bar"].update_xaxes(title="자치구")
 
-    commute_target = (
-        ["primary_commute_minutes", "secondary_commute_minutes"]
-        if "secondary_commute_minutes" in recommendations.columns
-        else ["commute_minutes"]
+    commute_target = [
+        column
+        for column in ["primary_commute_minutes", "secondary_commute_minutes", "commute_minutes"]
+        if column in recommendations.columns
+    ]
+    commute_bar_frame = recommendations.head(15)[["gu", *commute_target]].copy()
+    for column in commute_target:
+        commute_bar_frame[column] = pd.to_numeric(commute_bar_frame[column], errors="coerce")
+    commute_bar_frame = commute_bar_frame.melt(
+        id_vars=["gu"],
+        value_vars=commute_target,
+        var_name="항목",
+        value_name="통근시간(분)",
+    ).dropna(subset=["통근시간(분)"])
+    commute_bar_frame["항목"] = commute_bar_frame["항목"].map(
+        {
+            "primary_commute_minutes": "직장1 통근시간",
+            "secondary_commute_minutes": "직장2 통근시간",
+            "commute_minutes": "통근시간",
+        }
     )
     figs["commute_bar"] = _apply_common_layout(
         px.bar(
-            recommendations.head(15),
+            commute_bar_frame,
             x="gu",
-            y=commute_target,
+            y="통근시간(분)",
+            color="항목",
             barmode="group",
             title="통근 시간 비교",
-            labels={
-                "value": "통근시간(분)",
-                "variable": "항목",
-                "primary_commute_minutes": "직장1 통근시간",
-                "secondary_commute_minutes": "직장2 통근시간",
-                "commute_minutes": "통근시간",
-            },
         )
     )
 

@@ -24,6 +24,8 @@ from src.visualization import (
 
 PAGE_TITLE = "서울 신혼부부 전월세·매매 추천 대시보드"
 DOC_DIR = PROJECT_ROOT / "docs"
+PROJECT_README_PATH = PROJECT_ROOT / "README.md"
+DOCS_README_PATH = DOC_DIR / "README.md"
 RECOMMENDATION_AUDIT_PATH = DOC_DIR / "RECOMMENDATION_VALUE_AUDIT.md"
 SCORING_LINEAGE_PATH = DOC_DIR / "SCORING_DATA_LINEAGE.md"
 HOUSEHOLD_OPTIONS = ["1인", "2인 맞벌이"]
@@ -96,11 +98,10 @@ def _apply_persona_defaults(persona_row: pd.Series) -> None:
 
     st.session_state["budget_cap_range"] = (deposit_min, deposit_max)
     st.session_state["monthly_budget_range"] = (monthly_min, monthly_max)
-    st.session_state["cash_assets_krw"] = int(persona_row.get("current_seed_estimate_krw", 0))
-    monthly_income = float(persona_row.get("monthly_income_estimate_krw", 0) or 0)
-    monthly_saving = float(persona_row.get("monthly_saving_estimate_krw", 0) or 0)
-    saving_ratio_pct = round((monthly_saving / monthly_income) * 100, 1) if monthly_income > 0 else 10.0
-    st.session_state["saving_ratio_pct"] = max(saving_ratio_pct, 0.0)
+    st.session_state["cash_assets_krw"] = 100_000_000
+    st.session_state["saving_ratio_pct"] = 50.0
+    st.session_state["use_deposit_budget_filter"] = False
+    st.session_state["use_monthly_budget_filter"] = False
 
 
 def _get_applied_weights() -> dict[str, int]:
@@ -394,6 +395,10 @@ def _collect_sidebar_inputs(bundle: dict[str, object]) -> tuple[pd.Series | None
     st.session_state.setdefault("budget_cap_range", (400_000_000, 700_000_000))
     st.session_state.setdefault("monthly_budget_range", (500_000, 1_000_000))
     st.session_state.setdefault("weight_mode_select", "균형 모드")
+    st.session_state.setdefault("cash_assets_krw", 100_000_000)
+    st.session_state.setdefault("saving_ratio_pct", 50.0)
+    st.session_state.setdefault("use_deposit_budget_filter", False)
+    st.session_state.setdefault("use_monthly_budget_filter", False)
 
     year_index = available_years.index(2025) if 2025 in available_years else 0
     selected_year = st.sidebar.selectbox("기준 연도", available_years, index=year_index)
@@ -421,25 +426,43 @@ def _collect_sidebar_inputs(bundle: dict[str, object]) -> tuple[pd.Series | None
         step=1,
     )
 
-    deposit_budget_min, deposit_budget_max = st.sidebar.slider(
-        "전세보증금 예산 구간",
-        100_000_000,
-        1_500_000_000,
-        key="budget_cap_range",
-        step=50_000_000,
+    use_deposit_budget_filter = st.sidebar.checkbox(
+        "전세보증금 예산 구간 설정",
+        value=bool(st.session_state.get("use_deposit_budget_filter", False)),
+        key="use_deposit_budget_filter",
     )
-    monthly_budget_min, monthly_budget_max = st.sidebar.slider(
-        "월세 예산 구간",
-        300_000,
-        4_000_000,
-        key="monthly_budget_range",
-        step=100_000,
+    if use_deposit_budget_filter:
+        deposit_budget_min, deposit_budget_max = st.sidebar.slider(
+            "전세보증금 예산 구간",
+            100_000_000,
+            1_500_000_000,
+            key="budget_cap_range",
+            step=50_000_000,
+        )
+        st.sidebar.caption(
+            f"전세 선택 구간: {format_korean_money(deposit_budget_min)} ~ {format_korean_money(deposit_budget_max)}"
+        )
+    else:
+        deposit_budget_min, deposit_budget_max = 100_000_000, 1_500_000_000
+
+    use_monthly_budget_filter = st.sidebar.checkbox(
+        "월세 예산 구간 설정",
+        value=bool(st.session_state.get("use_monthly_budget_filter", False)),
+        key="use_monthly_budget_filter",
     )
-    st.sidebar.caption(
-        "선택 구간: "
-        f"전세 {format_korean_money(deposit_budget_min)} ~ {format_korean_money(deposit_budget_max)} / "
-        f"월세 {format_korean_money(monthly_budget_min)} ~ {format_korean_money(monthly_budget_max)}"
-    )
+    if use_monthly_budget_filter:
+        monthly_budget_min, monthly_budget_max = st.sidebar.slider(
+            "월세 예산 구간",
+            300_000,
+            4_000_000,
+            key="monthly_budget_range",
+            step=100_000,
+        )
+        st.sidebar.caption(
+            f"월세 선택 구간: {format_korean_money(monthly_budget_min)} ~ {format_korean_money(monthly_budget_max)}"
+        )
+    else:
+        monthly_budget_min, monthly_budget_max = 300_000, 4_000_000
     cash_assets_krw = st.sidebar.number_input(
         "현금자산",
         min_value=0,
@@ -507,6 +530,8 @@ def _collect_sidebar_inputs(bundle: dict[str, object]) -> tuple[pd.Series | None
         "deposit_budget_max_krw": deposit_budget_max,
         "monthly_budget_min_krw": monthly_budget_min,
         "monthly_budget_max_krw": monthly_budget_max,
+        "use_deposit_budget_filter": use_deposit_budget_filter,
+        "use_monthly_budget_filter": use_monthly_budget_filter,
         "cash_assets_krw": cash_assets_krw,
         "saving_ratio_pct": saving_ratio_pct,
         "budget_cap": deposit_budget_max,
@@ -519,6 +544,9 @@ def _collect_sidebar_inputs(bundle: dict[str, object]) -> tuple[pd.Series | None
 
 
 def _filter_budget_ranges(feature_table: pd.DataFrame, ui: dict[str, object]) -> tuple[pd.DataFrame, str | None]:
+    if not ui.get("use_deposit_budget_filter") and not ui.get("use_monthly_budget_filter"):
+        return feature_table, None
+
     deposit_mask = pd.to_numeric(feature_table["deposit_price_krw"], errors="coerce").between(
         ui["deposit_budget_min_krw"],
         ui["deposit_budget_max_krw"],
@@ -529,7 +557,13 @@ def _filter_budget_ranges(feature_table: pd.DataFrame, ui: dict[str, object]) ->
         ui["monthly_budget_max_krw"],
         inclusive="both",
     )
-    filtered = feature_table.loc[deposit_mask & monthly_mask].copy()
+    combined_mask = pd.Series(True, index=feature_table.index)
+    if ui.get("use_deposit_budget_filter"):
+        combined_mask &= deposit_mask
+    if ui.get("use_monthly_budget_filter"):
+        combined_mask &= monthly_mask
+
+    filtered = feature_table.loc[combined_mask].copy()
     if filtered.empty:
         return (
             feature_table,
@@ -702,10 +736,17 @@ def _render_summary_tab(
         f"적용 가중치: 가격 {ui['weights_pct']['price']}% / 통근 {ui['weights_pct']['commute']}% / "
         f"인프라 {ui['weights_pct']['infra']}% / 치안 {ui['weights_pct']['safety']}% / 전세가율 {ui['weights_pct']['risk']}%"
     )
-    st.caption(
-        f"예산 구간: 전세 {format_korean_money(ui['deposit_budget_min_krw'])} ~ {format_korean_money(ui['deposit_budget_max_krw'])} / "
-        f"월세 {format_korean_money(ui['monthly_budget_min_krw'])} ~ {format_korean_money(ui['monthly_budget_max_krw'])}"
+    deposit_caption = (
+        f"{format_korean_money(ui['deposit_budget_min_krw'])} ~ {format_korean_money(ui['deposit_budget_max_krw'])}"
+        if ui.get("use_deposit_budget_filter")
+        else "미설정"
     )
+    monthly_caption = (
+        f"{format_korean_money(ui['monthly_budget_min_krw'])} ~ {format_korean_money(ui['monthly_budget_max_krw'])}"
+        if ui.get("use_monthly_budget_filter")
+        else "미설정"
+    )
+    st.caption(f"예산 구간: 전세 {deposit_caption} / 월세 {monthly_caption}")
 
     if recommendations.empty:
         st.warning("현재 조건에 맞는 추천 결과가 없습니다.")
@@ -904,6 +945,60 @@ def _render_data_tab(
         st.markdown(scoring_lineage_md)
 
 
+def _render_landing_tab(
+    project_readme_md: str,
+    docs_readme_md: str,
+    recommendation_audit_md: str,
+    scoring_lineage_md: str,
+) -> None:
+    st.markdown('<div class="section-title">대시보드 안내</div>', unsafe_allow_html=True)
+    st.markdown(
+        """
+        서울 자치구 추천 대시보드를 시작하기 전에 아래 문서에서 데이터 범위, 페르소나 기준, 점수 계산 방식을 먼저 확인할 수 있습니다.
+        사이드바에서 필터를 설정하면 나머지 탭이 같은 조건으로 동시에 갱신됩니다.
+        """
+    )
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("기본 현금자산", format_korean_money(100_000_000))
+    c2.metric("기본 저축비율", "50%")
+    c3.metric("예산 구간 필터", "기본 해제")
+
+    with st.expander("대시보드 README", expanded=True):
+        st.markdown(project_readme_md)
+
+    with st.expander("문서 구조 안내", expanded=False):
+        st.markdown(docs_readme_md)
+
+    with st.expander("데이터 출처", expanded=False):
+        st.markdown(
+            """
+            - `매매/전월세`: 국토교통부 실거래가 공개 데이터와 집계 파일
+            - `통근시간`: 자치구별 목적지 평균 소요시간 원천 CSV, 시간대별 통행량 가중평균 적용
+            - `인프라`: 서울시 공원, 대형마트, 병원 위치 데이터
+            - `치안`: 서울시 범죄 통계, 경찰 만족도 데이터
+            - `페르소나`: 통계청 KOSIS `DT_1NW1036` 신혼부부 소득 및 금융권 대출 잔액 분포
+            """
+        )
+
+    with st.expander("페르소나 선정 기준", expanded=False):
+        st.markdown(
+            """
+            - 소득 구간은 전체 분포 기준 `P25 / P50 / P75` 대표값으로 `저소득 / 중간소득 / 고소득`을 구분합니다.
+            - 부채 구간은 선택된 소득구간 내부의 금융권 대출 잔액 분포 기준 `P25 / P50 / P75` 대표값으로 `저부채 / 중간부채 / 고부채`를 구분합니다.
+            - 가구 유형이 `2인 맞벌이`이면 소득과 부채, 구매 시뮬레이션 기준값을 `1인` 대비 2배로 적용합니다.
+            """
+        )
+
+    _render_scoring_thresholds_guide()
+
+    with st.expander("점수 라인리지 문서", expanded=False):
+        st.markdown(scoring_lineage_md)
+
+    with st.expander("추천 값 검증 자료", expanded=False):
+        st.markdown(recommendation_audit_md)
+
+
 def main() -> None:
     try:
         bundle = load_dataset_bundle()
@@ -937,23 +1032,31 @@ def main() -> None:
         ui["secondary_workplace_name"],
     )
     rank_chart = build_top_rank_chart(recommendations)
-    rent_distribution = _build_rent_distribution_chart(feature_table)
-    score_distribution = _build_score_distribution_chart(recommendations)
+    project_readme_md = _read_markdown(PROJECT_README_PATH)
+    docs_readme_md = _read_markdown(DOCS_README_PATH)
     recommendation_audit_md = _read_markdown(RECOMMENDATION_AUDIT_PATH)
     scoring_lineage_md = _read_markdown(SCORING_LINEAGE_PATH)
 
     tabs = st.tabs(
         [
+            "랜딩",
             "추천 요약",
             "구별 상세 비교",
             "인프라·입지 분석",
             "치안·재개발 분석",
             "페르소나 구매 시뮬레이션",
-            "데이터 근거",
         ]
     )
 
     with tabs[0]:
+        _render_landing_tab(
+            project_readme_md,
+            docs_readme_md,
+            recommendation_audit_md,
+            scoring_lineage_md,
+        )
+
+    with tabs[1]:
         _render_summary_tab(
             recommendations,
             recommendation_summary,
@@ -965,11 +1068,11 @@ def main() -> None:
             outputs["filter_notice"],
         )
 
-    with tabs[1]:
+    with tabs[2]:
         _render_compare_tab(recommendations)
         st.plotly_chart(gallery["score_stacked_bar"], width="stretch")
 
-    with tabs[2]:
+    with tabs[3]:
         st.markdown('<div class="section-title">인프라·입지 분석</div>', unsafe_allow_html=True)
         c1, c2 = st.columns(2)
         with c1:
@@ -994,7 +1097,7 @@ def main() -> None:
             st.caption("평균 통근 시간이 가장 긴 자치구 TOP 5만 표시합니다.")
             st.plotly_chart(build_commute_timeseries_chart(destination_frame, selected_destination), width="stretch")
 
-    with tabs[3]:
+    with tabs[4]:
         st.markdown('<div class="section-title">치안·재개발 분석</div>', unsafe_allow_html=True)
         c1, c2 = st.columns(2)
         with c1:
@@ -1004,18 +1107,8 @@ def main() -> None:
             st.plotly_chart(gallery["redevelopment_stage_bar"], width="stretch")
             st.plotly_chart(gallery["redevelopment_vs_score"], width="stretch")
 
-    with tabs[4]:
-        _render_persona_tab(persona_row, persona_simulation)
-
     with tabs[5]:
-        _render_data_tab(
-            feature_table,
-            recommendations,
-            rent_distribution,
-            score_distribution,
-            recommendation_audit_md,
-            scoring_lineage_md,
-        )
+        _render_persona_tab(persona_row, persona_simulation)
 
 def _render_persona_tab(persona_row: pd.Series | None, persona_simulation: pd.DataFrame) -> None:
     st.markdown('<div class="section-title">페르소나 구매 시뮬레이션</div>', unsafe_allow_html=True)
