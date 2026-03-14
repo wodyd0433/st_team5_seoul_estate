@@ -368,6 +368,19 @@ def _load_commute_timeseries() -> pd.DataFrame:
     return combined
 
 
+def _select_top_commute_gus(frame: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    top_gus = (
+        frame.groupby("gu", as_index=False)
+        .agg(overall_avg_minutes=("avg_minutes", "mean"))
+        .sort_values("overall_avg_minutes", ascending=False)
+        .head(top_n)["gu"]
+        .tolist()
+    )
+    return frame.loc[frame["gu"].isin(top_gus)].copy()
+
+
 def _show_intro(bundle: dict[str, object]) -> None:
     st.title(PAGE_TITLE)
     with st.popover("대시보드 기준 설명"):
@@ -981,6 +994,8 @@ def main() -> None:
             destination_frame = commute_timeseries.loc[
                 commute_timeseries["destination_name"].eq(selected_destination)
             ].copy()
+            destination_frame = _select_top_commute_gus(destination_frame, top_n=5)
+            st.caption("평균 통근 시간이 가장 긴 자치구 TOP 5만 표시합니다.")
             st.plotly_chart(build_commute_timeseries_chart(destination_frame, selected_destination), width="stretch")
 
     with tabs[3]:
