@@ -349,3 +349,32 @@ def build_persona_simulation(feature_table: pd.DataFrame, persona_row: pd.Series
         labels=["어려움", "도전 가능", "매수 가능"],
     ).astype("string")
     return frame.sort_values(["buy_3y_gap_krw", "buy_2y_gap_krw"], ascending=False).reset_index(drop=True)
+
+def build_persona_simulation(
+    feature_table: pd.DataFrame,
+    persona_row: pd.Series,
+    cash_assets_krw: float,
+    saving_ratio_pct: float,
+) -> pd.DataFrame:
+    frame = feature_table.copy()
+    monthly_income = float(persona_row.get("monthly_income_estimate_krw", 0) or 0)
+    current_total_debt_krw = float(persona_row.get("debt_balance_estimate_krw", 0) or 0)
+    annual_savings_krw = max(monthly_income * (float(saving_ratio_pct) / 100.0) * 12, 0.0)
+
+    frame["cash_assets_krw"] = float(cash_assets_krw)
+    frame["current_total_debt_krw"] = current_total_debt_krw
+    frame["annual_savings_krw"] = annual_savings_krw
+    frame["available_loan_krw"] = frame["sale_price_krw"].fillna(0) * 0.70
+    frame["available_funds_krw"] = frame["cash_assets_krw"] + frame["available_loan_krw"] + frame["annual_savings_krw"]
+    frame["purchase_gap_krw"] = frame["sale_price_krw"].fillna(float("inf")) - frame["available_funds_krw"]
+    frame["expected_total_debt_krw"] = frame["current_total_debt_krw"] + frame["available_loan_krw"]
+    frame["monthly_interest_cost_krw"] = frame["expected_total_debt_krw"] * 0.04 / 12
+    frame["interest_burden_rate_pct"] = np.where(
+        monthly_income > 0,
+        frame["monthly_interest_cost_krw"] / monthly_income * 100,
+        np.nan,
+    )
+    return frame.sort_values(
+        ["purchase_gap_krw", "interest_burden_rate_pct", "sale_price_krw"],
+        ascending=[True, True, True],
+    ).reset_index(drop=True)
