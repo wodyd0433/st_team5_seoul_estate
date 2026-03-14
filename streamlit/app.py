@@ -691,7 +691,7 @@ def _render_summary_tab(
                 f"소득 구간 판정: {persona_income_band} / "
                 f"금융권 대출 구간 판정: {debt_segment_label} ({debt_percentile_text})"
             )
-        with st.expander("페르소나 분류 기준 및 출처", expanded=False):
+        if False:
             if income_reference is not None:
                 debt_p25 = persona_row.get("debt_p25_krw")
                 debt_p50 = persona_row.get("debt_p50_krw")
@@ -787,7 +787,6 @@ def _render_compare_tab(recommendations: pd.DataFrame) -> None:
     if recommendations.empty:
         st.warning("현재 조건에 맞는 비교 대상이 없습니다.")
         return
-    _render_scoring_thresholds_guide()
     compare_cols = [
         "gu",
         "total_score",
@@ -1091,6 +1090,97 @@ def _render_landing_tab() -> None:
     )
 
 
+def _build_eda_threshold_table(scoring_meta: dict[str, object]) -> pd.DataFrame:
+    thresholds = scoring_meta.get("thresholds", {}) if isinstance(scoring_meta, dict) else {}
+    rows: list[dict[str, object]] = []
+    label_map = {
+        "price": "가격(전세)",
+        "commute": "통근",
+        "infra": "인프라",
+        "safety": "치안(범죄건수)",
+        "risk": "전세가율",
+    }
+    for metric_key, label in label_map.items():
+        metric_meta = thresholds.get(metric_key, {})
+        rows.append(
+            {
+                "지표": label,
+                "평균": metric_meta.get("mean"),
+                "표준편차": metric_meta.get("std"),
+                "-1.5σ": metric_meta.get("lower_1_5_std"),
+                "-0.5σ": metric_meta.get("lower_0_5_std"),
+                "0.5σ": metric_meta.get("upper_0_5_std"),
+                "1.5σ": metric_meta.get("upper_1_5_std"),
+                "방향": "높을수록 좋음" if metric_meta.get("higher_is_better") else "낮을수록 좋음",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _render_eda_tab(
+    recommendations: pd.DataFrame,
+    scoring_meta: dict[str, object],
+    persona_row: pd.Series | None,
+    income_reference: dict[str, object] | None,
+) -> None:
+    st.markdown('<div class="section-title">EDA 및 기준 선정</div>', unsafe_allow_html=True)
+
+    if persona_row is not None:
+        st.markdown("#### 페르소나 분류 기준")
+        if income_reference is not None:
+            st.markdown(
+                f"""
+                - 소득 구간: `P25 / P50 / P75` 기준으로 저소득, 중간소득, 고소득 구분
+                - 현재 선택 페르소나: `{persona_row['persona_name']}`
+                - 소득 기준값: {format_korean_money(income_reference['p25_annual_krw'])} / {format_korean_money(income_reference['p50_annual_krw'])} / {format_korean_money(income_reference['p75_annual_krw'])}
+                - 부채 구간: 해당 소득구간 내부 금융권 대출 잔액 분포의 `P25 / P50 / P75`
+                """
+            )
+
+    st.markdown("#### 점수 산정 기준")
+    st.markdown(
+        """
+        가격(전세), 통근, 인프라, 치안(범죄건수), 전세가율의 분포를 보고
+        `평균 ± 0.5σ`, `평균 ± 1.5σ`를 5단계 점수 구간 threshold로 사용합니다.
+        """
+    )
+
+    threshold_table = _build_eda_threshold_table(scoring_meta)
+    numeric_cols = ["평균", "표준편차", "-1.5σ", "-0.5σ", "0.5σ", "1.5σ"]
+    styled_thresholds = threshold_table.copy()
+    for column in numeric_cols:
+        styled_thresholds[column] = styled_thresholds[column].map(lambda x: f"{x:,.2f}" if pd.notna(x) else "-")
+    st.dataframe(styled_thresholds, width="stretch", height=240)
+
+    metric_defs = [
+        ("가격(전세)", "deposit_price_krw"),
+        ("통근", "commute_minutes"),
+        ("인프라", "infra_index"),
+        ("치안(범죄건수)", "crime_total_count"),
+        ("전세가율", "jeonse_ratio_pct"),
+    ]
+    chart_cols = st.columns(2)
+    for idx, (label, column) in enumerate(metric_defs):
+        view = recommendations[["gu", column]].copy()
+        view[column] = pd.to_numeric(view[column], errors="coerce")
+        view = view.dropna(subset=[column])
+        if view.empty:
+            continue
+        metric_key = ["price", "commute", "infra", "safety", "risk"][idx]
+        metric_meta = scoring_meta.get("thresholds", {}).get(metric_key, {}) if isinstance(scoring_meta, dict) else {}
+        fig = px.histogram(view, x=column, nbins=20, title=f"{label} 분포")
+        for threshold_key, color in [
+            ("lower_1_5_std", "#22c55e"),
+            ("lower_0_5_std", "#84cc16"),
+            ("upper_0_5_std", "#f59e0b"),
+            ("upper_1_5_std", "#ef4444"),
+        ]:
+            threshold_value = metric_meta.get(threshold_key)
+            if pd.notna(threshold_value):
+                fig.add_vline(x=float(threshold_value), line_dash="dash", line_color=color)
+        chart_cols[idx % 2].plotly_chart(fig, width="stretch")
+
+
 def main() -> None:
     try:
         bundle = load_dataset_bundle()
@@ -1247,6 +1337,112 @@ def _render_persona_tab(persona_row: pd.Series | None, persona_simulation: pd.Da
         }
     )
     st.dataframe(sim_table, width="stretch", height=420)
+
+
+def main() -> None:
+    try:
+        bundle = load_dataset_bundle()
+    except Exception as exc:
+        _show_data_load_error(exc)
+        st.stop()
+
+    _show_intro(bundle)
+    persona_row, ui = _collect_sidebar_inputs(bundle)
+    outputs = _compute_outputs(bundle, ui)
+    income_reference = _scale_income_reference(_build_income_reference(bundle), ui["household_type"])
+
+    recommendations = outputs["recommendations"]
+    feature_table = outputs["feature_table"]
+    persona_simulation = (
+        build_persona_simulation(
+            recommendations,
+            persona_row,
+            ui["cash_assets_krw"],
+            ui["saving_ratio_pct"],
+        )
+        if persona_row is not None
+        else recommendations.copy()
+    )
+
+    gallery = build_visualization_gallery(feature_table, recommendations, bundle, ui["selected_year"])
+    recommendation_summary = build_recommendation_summary(recommendations, ui["household_type"])
+    recommendation_map = build_recommendation_map(
+        recommendations,
+        ui["workplace_name"],
+        ui["secondary_workplace_name"],
+    )
+    rank_chart = build_top_rank_chart(recommendations)
+    tabs = st.tabs(
+        [
+            "프로젝트 개요",
+            "EDA 및 기준 선정",
+            "추천 요약",
+            "구별 상세 비교",
+            "인프라·입지 분석",
+            "치안·재개발 분석",
+            "페르소나 구매 시뮬레이션",
+        ]
+    )
+
+    with tabs[0]:
+        _render_landing_tab()
+
+    with tabs[1]:
+        _render_eda_tab(recommendations, outputs["scoring_meta"], persona_row, income_reference)
+
+    with tabs[2]:
+        _render_summary_tab(
+            recommendations,
+            recommendation_summary,
+            recommendation_map,
+            rank_chart,
+            persona_row,
+            ui,
+            income_reference,
+            outputs["filter_notice"],
+        )
+
+    with tabs[3]:
+        _render_compare_tab(recommendations)
+        st.plotly_chart(gallery["score_stacked_bar"], width="stretch")
+
+    with tabs[4]:
+        st.markdown('<div class="section-title">인프라·입지 분석</div>', unsafe_allow_html=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.plotly_chart(gallery["infra_bar"], width="stretch")
+            st.plotly_chart(gallery["infra_scatter"], width="stretch")
+        with c2:
+            st.plotly_chart(gallery["infra_score_bar"], width="stretch")
+            st.plotly_chart(gallery["recommendation_bubble"], width="stretch")
+        commute_timeseries = _get_commute_timeseries(bundle)
+        if not commute_timeseries.empty:
+            destination_options = commute_timeseries["destination_name"].drop_duplicates().tolist()
+            selected_destination = st.selectbox(
+                "시간대별 평균 소요시간 목적지",
+                destination_options,
+                index=0,
+                key="commute_timeseries_destination",
+            )
+            destination_frame = commute_timeseries.loc[
+                commute_timeseries["destination_name"].eq(selected_destination)
+            ].copy()
+            destination_frame = _select_top_commute_gus(destination_frame, top_n=5)
+            st.caption("평균 통근 시간이 가장 긴 자치구 TOP 5만 표시합니다.")
+            st.plotly_chart(build_commute_timeseries_chart(destination_frame, selected_destination), width="stretch")
+
+    with tabs[5]:
+        st.markdown('<div class="section-title">치안·재개발 분석</div>', unsafe_allow_html=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.plotly_chart(gallery["safety_dual_axis"], width="stretch")
+            st.plotly_chart(gallery["crime_vs_police"], width="stretch")
+        with c2:
+            st.plotly_chart(gallery["redevelopment_stage_bar"], width="stretch")
+            st.plotly_chart(gallery["redevelopment_vs_score"], width="stretch")
+
+    with tabs[6]:
+        _render_persona_tab(persona_row, persona_simulation)
 
 
 if __name__ == "__main__":

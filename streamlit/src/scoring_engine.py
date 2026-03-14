@@ -52,108 +52,45 @@ def _score_from_star(series: pd.Series) -> pd.Series:
     return pd.to_numeric(series, errors="coerce").fillna(1).clip(1, 5) * 20
 
 
-def _price_star(series: pd.Series) -> pd.Series:
+def _build_std_thresholds(series: pd.Series) -> dict[str, float]:
     values = pd.to_numeric(series, errors="coerce")
-    return pd.Series(
-        np.select(
+    mean = float(values.mean()) if values.notna().any() else 0.0
+    std = float(values.std(ddof=0)) if values.notna().any() else 0.0
+    return {
+        "mean": mean,
+        "std": std,
+        "lower_1_5_std": mean - 1.5 * std,
+        "lower_0_5_std": mean - 0.5 * std,
+        "upper_0_5_std": mean + 0.5 * std,
+        "upper_1_5_std": mean + 1.5 * std,
+    }
+
+
+def _score_star_from_thresholds(series: pd.Series, thresholds: dict[str, float], higher_is_better: bool) -> pd.Series:
+    values = pd.to_numeric(series, errors="coerce")
+    if higher_is_better:
+        stars = np.select(
             [
-                values.lt(350_000_000),
-                values.lt(500_000_000),
-                values.lt(700_000_000),
-                values.lt(950_000_000),
+                values.ge(thresholds["upper_1_5_std"]),
+                values.ge(thresholds["upper_0_5_std"]),
+                values.ge(thresholds["lower_0_5_std"]),
+                values.ge(thresholds["lower_1_5_std"]),
             ],
             [5, 4, 3, 2],
             default=1,
-        ),
-        index=series.index,
-        dtype="int64",
-    )
-
-
-def _commute_star(series: pd.Series) -> pd.Series:
-    values = pd.to_numeric(series, errors="coerce")
-    return pd.Series(
-        np.select(
+        )
+    else:
+        stars = np.select(
             [
-                values.le(20),
-                values.le(30),
-                values.le(45),
-                values.le(60),
+                values.le(thresholds["lower_1_5_std"]),
+                values.le(thresholds["lower_0_5_std"]),
+                values.le(thresholds["upper_0_5_std"]),
+                values.le(thresholds["upper_1_5_std"]),
             ],
             [5, 4, 3, 2],
             default=1,
-        ),
-        index=series.index,
-        dtype="int64",
-    )
-
-
-def _risk_star(series: pd.Series) -> pd.Series:
-    values = pd.to_numeric(series, errors="coerce")
-    return pd.Series(
-        np.select(
-            [
-                values.lt(50),
-                values.lt(60),
-                values.lt(70),
-                values.lt(80),
-            ],
-            [5, 4, 3, 2],
-            default=1,
-        ),
-        index=series.index,
-        dtype="int64",
-    )
-
-
-def _infra_star(frame: pd.DataFrame) -> pd.Series:
-    mart = pd.to_numeric(frame.get("mart_count"), errors="coerce").fillna(0)
-    hospital = pd.to_numeric(frame.get("hospital_count"), errors="coerce").fillna(0)
-    park = pd.to_numeric(frame.get("park_count"), errors="coerce").fillna(0)
-
-    hospital_q70 = hospital.quantile(0.7) if hospital.notna().any() else 0
-    park_q70 = park.quantile(0.7) if park.notna().any() else 0
-    infra_index = mart * 2 + hospital * 1.5 + park
-    infra_q50 = infra_index.quantile(0.5) if infra_index.notna().any() else 0
-    infra_q20 = infra_index.quantile(0.2) if infra_index.notna().any() else 0
-
-    stars = np.select(
-        [
-            (mart >= 3) & (hospital >= 2) & (park >= park_q70),
-            (mart >= 2) & (hospital >= hospital_q70) & (park >= park_q70),
-            (mart >= 1) & (infra_index >= infra_q50),
-            infra_index >= infra_q20,
-        ],
-        [5, 4, 3, 2],
-        default=1,
-    )
-    return pd.Series(stars, index=frame.index, dtype="int64")
-
-
-def _safety_star(frame: pd.DataFrame) -> pd.Series:
-    crime = pd.to_numeric(frame.get("crime_total_count"), errors="coerce")
-    police = pd.to_numeric(frame.get("police_satisfaction_score"), errors="coerce")
-
-    crime = crime.fillna(crime.median() if crime.notna().any() else 0)
-    police = police.fillna(police.median() if police.notna().any() else 0)
-
-    crime_q10 = crime.quantile(0.10)
-    crime_q25 = crime.quantile(0.25)
-    crime_q75 = crime.quantile(0.75)
-    crime_q90 = crime.quantile(0.90)
-    police_q90 = police.quantile(0.90)
-
-    stars = np.select(
-        [
-            (crime <= crime_q10) & (police >= police_q90),
-            crime <= crime_q25,
-            crime <= crime_q75,
-            crime <= crime_q90,
-        ],
-        [5, 4, 3, 2],
-        default=1,
-    )
-    return pd.Series(stars, index=frame.index, dtype="int64")
+        )
+    return pd.Series(stars, index=series.index, dtype="int64")
 
 
 def prepare_commute_frame(
@@ -243,11 +180,31 @@ def score_recommendations(
     if selected_gus:
         frame = frame.loc[frame["gu"].isin(selected_gus)].copy()
 
-    frame["price_star"] = _price_star(frame["deposit_price_krw"])
-    frame["commute_star"] = _commute_star(frame["commute_minutes"])
-    frame["infra_star"] = _infra_star(frame)
-    frame["safety_star"] = _safety_star(frame)
-    frame["risk_star"] = _risk_star(frame["jeonse_ratio_pct"])
+    frame["infra_index"] = (
+        pd.to_numeric(frame.get("mart_count"), errors="coerce").fillna(0) * 2
+        + pd.to_numeric(frame.get("hospital_count"), errors="coerce").fillna(0) * 1.5
+        + pd.to_numeric(frame.get("park_count"), errors="coerce").fillna(0)
+    )
+    metric_specs = {
+        "price": {"series": frame["deposit_price_krw"], "higher_is_better": False, "source_col": "deposit_price_krw"},
+        "commute": {"series": frame["commute_minutes"], "higher_is_better": False, "source_col": "commute_minutes"},
+        "infra": {"series": frame["infra_index"], "higher_is_better": True, "source_col": "infra_index"},
+        "safety": {"series": frame["crime_total_count"], "higher_is_better": False, "source_col": "crime_total_count"},
+        "risk": {"series": frame["jeonse_ratio_pct"], "higher_is_better": False, "source_col": "jeonse_ratio_pct"},
+    }
+    threshold_meta: dict[str, dict[str, float | str | bool]] = {}
+    for metric_name, spec in metric_specs.items():
+        thresholds = _build_std_thresholds(spec["series"])
+        threshold_meta[metric_name] = {
+            **thresholds,
+            "higher_is_better": spec["higher_is_better"],
+            "source_col": spec["source_col"],
+        }
+        frame[f"{metric_name}_star"] = _score_star_from_thresholds(
+            spec["series"],
+            thresholds,
+            higher_is_better=bool(spec["higher_is_better"]),
+        )
 
     frame["price_score"] = _score_from_star(frame["price_star"])
     frame["commute_score"] = _score_from_star(frame["commute_star"])
@@ -294,4 +251,4 @@ def score_recommendations(
     ).reset_index(drop=True)
     frame["score_rank"] = frame.index + 1
 
-    return frame, active_weights.copy()
+    return frame, {"weights": active_weights.copy(), "thresholds": threshold_meta}
