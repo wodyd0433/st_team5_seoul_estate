@@ -359,6 +359,24 @@ def _load_commute_timeseries() -> pd.DataFrame:
         return pd.DataFrame(columns=["destination_name", "gu", "time_order", "time_label", "avg_minutes"])
 
     combined = pd.concat(frames, ignore_index=True)
+    bounds = (
+        combined.groupby(["destination_name", "gu"], as_index=False)
+        .agg(
+            q1=("avg_minutes", lambda s: s.quantile(0.25)),
+            q3=("avg_minutes", lambda s: s.quantile(0.75)),
+        )
+    )
+    bounds["iqr"] = bounds["q3"] - bounds["q1"]
+    bounds["lower_bound"] = bounds["q1"] - 1.5 * bounds["iqr"]
+    bounds["upper_bound"] = bounds["q3"] + 1.5 * bounds["iqr"]
+    combined = combined.merge(
+        bounds[["destination_name", "gu", "lower_bound", "upper_bound"]],
+        on=["destination_name", "gu"],
+        how="left",
+    )
+    combined = combined.loc[
+        combined["avg_minutes"].ge(combined["lower_bound"]) & combined["avg_minutes"].le(combined["upper_bound"])
+    ].copy()
     combined = (
         combined.groupby(["destination_name", "gu", "time_order", "time_label"], as_index=False)
         .agg(avg_minutes=("avg_minutes", "mean"))
