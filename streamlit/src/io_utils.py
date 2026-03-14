@@ -240,6 +240,80 @@ def _fit_commute_models(frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _load_commute_average_frames() -> pd.DataFrame:
+    source_specs = [
+        ("광화문역", DATASET_PATHS["commute_avg_gwanghwamun"], "광화문"),
+        ("강남역", DATASET_PATHS["commute_avg_gangnam"], "역삼동"),
+        ("여의도역", DATASET_PATHS["commute_avg_yeouido"], "여의도동"),
+        ("성수역", DATASET_PATHS["commute_avg_seongsu_1"], "성수동"),
+        ("성수역", DATASET_PATHS["commute_avg_seongsu_2"], "성수동"),
+    ]
+
+    frames: list[pd.DataFrame] = []
+    for hub_name, path, destination_name in source_specs:
+        frame = _read_csv_with_fallback(path)
+        frame["hub_name"] = hub_name
+        frame["destination_name"] = destination_name
+        frame["gu"] = frame["stgSggNm"].astype("string")
+        frame["tzon"] = pd.to_numeric(frame["tzon"], errors="coerce")
+        frame["quater"] = pd.to_numeric(frame["quater"], errors="coerce")
+        frame["useStf"] = pd.to_numeric(frame["useStf"], errors="coerce")
+        frame["useTm"] = pd.to_numeric(frame["useTm"], errors="coerce")
+        frame["time_order"] = frame["tzon"] * 100 + frame["quater"]
+        frame["time_label"] = frame["tzon"].fillna(0).astype(int).map(lambda value: f"{value:02d}") + ":" + frame["quater"].fillna(0).astype(int).map(lambda value: f"{value:02d}")
+        frame["avg_minutes"] = frame["useTm"] / 60.0
+        frames.append(frame[["hub_name", "destination_name", "gu", "time_order", "time_label", "useStf", "useTm", "avg_minutes"]])
+
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def _remove_commute_outliers(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    bounds = (
+        frame.groupby(["hub_name", "gu"], as_index=False)
+        .agg(
+            q1=("avg_minutes", lambda s: s.quantile(0.25)),
+            q3=("avg_minutes", lambda s: s.quantile(0.75)),
+        )
+    )
+    bounds["iqr"] = bounds["q3"] - bounds["q1"]
+    bounds["lower_bound"] = bounds["q1"] - 1.5 * bounds["iqr"]
+    bounds["upper_bound"] = bounds["q3"] + 1.5 * bounds["iqr"]
+    merged = frame.merge(
+        bounds[["hub_name", "gu", "lower_bound", "upper_bound"]],
+        on=["hub_name", "gu"],
+        how="left",
+    )
+    return merged.loc[
+        merged["avg_minutes"].ge(merged["lower_bound"]) & merged["avg_minutes"].le(merged["upper_bound"])
+    ].copy()
+
+
+def _build_commute_average_bundle() -> tuple[pd.DataFrame, pd.DataFrame]:
+    raw = _load_commute_average_frames()
+    filtered = _remove_commute_outliers(raw)
+    filtered["weighted_use_tm"] = pd.to_numeric(filtered["useTm"], errors="coerce") * pd.to_numeric(filtered["useStf"], errors="coerce")
+    timeseries = (
+        filtered.groupby(["hub_name", "destination_name", "gu", "time_order", "time_label"], as_index=False)
+        .agg(
+            avg_minutes=("avg_minutes", "mean"),
+            use_stf_sum=("useStf", "sum"),
+        )
+        .sort_values(["hub_name", "gu", "time_order"])
+        .reset_index(drop=True)
+    )
+    weighted = (
+        filtered.groupby(["hub_name", "gu"], as_index=False)
+        .agg(
+            weighted_time_sum=("weighted_use_tm", "sum"),
+            traffic_sum=("useStf", "sum"),
+        )
+    )
+    weighted["avg_commute_minutes"] = weighted["weighted_time_sum"] / weighted["traffic_sum"].replace(0, np.nan) / 60.0
+    return timeseries, weighted[["hub_name", "gu", "avg_commute_minutes"]]
+
+
 @st.cache_data(ttl=RAW_CACHE_TTL, show_spinner=False)
 def load_dataset_bundle() -> dict[str, object]:
     missing_files = get_missing_dataset_report()
@@ -296,6 +370,7 @@ def load_dataset_bundle() -> dict[str, object]:
     income_debt_distribution = _read_csv_with_fallback(DATASET_PATHS["income_debt_distribution"])
     commute_zone_frames = _load_commute_zone_frames()
     commute_models = _fit_commute_models(commute_zone_frames)
+    commute_timeseries, commute_weighted_avg = _build_commute_average_bundle()
 
     yearly_rent_all = _read_csv_with_fallback(DATASET_PATHS["rent_avg_all"])
     year_column = next(
@@ -346,6 +421,8 @@ def load_dataset_bundle() -> dict[str, object]:
         "hospital_db_tables": tables,
         "commute_zone_frames": commute_zone_frames,
         "commute_models": commute_models,
+        "commute_timeseries": commute_timeseries,
+        "commute_weighted_avg": commute_weighted_avg,
         "income_newlyweds": income_newlyweds,
         "debt_newlyweds": debt_newlyweds,
         "income_debt_distribution": income_debt_distribution,
@@ -366,6 +443,8 @@ def load_dataset_bundle() -> dict[str, object]:
             "income_debt_distribution": income_debt_distribution,
             "persona_profiles": persona_profiles,
             **{f"commute_{k}": v for k, v in commute_zone_frames.items()},
+            "commute_timeseries": commute_timeseries,
+            "commute_weighted_avg": commute_weighted_avg,
         },
         "unit_report": pd.DataFrame(
             [{"dataset": "apt_rent", **row} for row in rent_unit_report]

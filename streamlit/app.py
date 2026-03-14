@@ -322,68 +322,11 @@ def _build_score_distribution_chart(recommendations: pd.DataFrame):
     return fig
 
 
-@st.cache_data(show_spinner=False)
-def _load_commute_timeseries() -> pd.DataFrame:
-    file_patterns = [
-        "구단위 세종로 평균 소요시간_20260224.csv",
-        "구단위 역삼동 평균 소요시간_20260224.csv",
-        "구단위 여의도동 평균 소요시간_20260224.csv",
-        "구단위 성수동1가 평균 소요시간_20260224.csv",
-        "구단위 성수동2가 평균 소요시간_20260224.csv",
-    ]
-    rename_map = {
-        "세종로": "광화문",
-        "역삼동": "역삼동",
-        "여의도동": "여의도동",
-        "성수동1가": "성수동",
-        "성수동2가": "성수동",
-    }
-
-    frames: list[pd.DataFrame] = []
-    for filename in file_patterns:
-        path = DATA_DIR / filename
-        if not path.exists():
-            continue
-        frame = pd.read_csv(path, encoding="utf-8-sig")
-        frame["destination_name"] = frame["arrEmdNm"].map(rename_map).fillna(frame["arrEmdNm"])
-        frame["gu"] = frame["stgSggNm"].astype(str)
-        frame["tzon"] = pd.to_numeric(frame["tzon"], errors="coerce")
-        frame["quater"] = pd.to_numeric(frame["quater"], errors="coerce")
-        frame["useTm"] = pd.to_numeric(frame["useTm"], errors="coerce")
-        frame["time_order"] = frame["tzon"] * 100 + frame["quater"]
-        frame["time_label"] = frame["tzon"].fillna(0).astype(int).map(lambda value: f"{value:02d}") + ":" + frame["quater"].fillna(0).astype(int).map(lambda value: f"{value:02d}")
-        frame["avg_minutes"] = frame["useTm"] / 60.0
-        frames.append(frame[["destination_name", "gu", "time_order", "time_label", "avg_minutes"]])
-
-    if not frames:
-        return pd.DataFrame(columns=["destination_name", "gu", "time_order", "time_label", "avg_minutes"])
-
-    combined = pd.concat(frames, ignore_index=True)
-    bounds = (
-        combined.groupby(["destination_name", "gu"], as_index=False)
-        .agg(
-            q1=("avg_minutes", lambda s: s.quantile(0.25)),
-            q3=("avg_minutes", lambda s: s.quantile(0.75)),
-        )
-    )
-    bounds["iqr"] = bounds["q3"] - bounds["q1"]
-    bounds["lower_bound"] = bounds["q1"] - 1.5 * bounds["iqr"]
-    bounds["upper_bound"] = bounds["q3"] + 1.5 * bounds["iqr"]
-    combined = combined.merge(
-        bounds[["destination_name", "gu", "lower_bound", "upper_bound"]],
-        on=["destination_name", "gu"],
-        how="left",
-    )
-    combined = combined.loc[
-        combined["avg_minutes"].ge(combined["lower_bound"]) & combined["avg_minutes"].le(combined["upper_bound"])
-    ].copy()
-    combined = (
-        combined.groupby(["destination_name", "gu", "time_order", "time_label"], as_index=False)
-        .agg(avg_minutes=("avg_minutes", "mean"))
-        .sort_values(["destination_name", "gu", "time_order"])
-        .reset_index(drop=True)
-    )
-    return combined
+def _get_commute_timeseries(bundle: dict[str, object]) -> pd.DataFrame:
+    frame = bundle.get("commute_timeseries")
+    if isinstance(frame, pd.DataFrame):
+        return frame.copy()
+    return pd.DataFrame(columns=["destination_name", "gu", "time_order", "time_label", "avg_minutes"])
 
 
 def _select_top_commute_gus(frame: pd.DataFrame, top_n: int = 5) -> pd.DataFrame:
@@ -639,6 +582,7 @@ def _compute_outputs(bundle: dict[str, object], ui: dict[str, object]) -> dict[s
         ui["workplace_name"],
         filtered_feature_table,
         bundle["commute_models"],
+        bundle.get("commute_weighted_avg"),
         household_type=ui["household_type"],
         secondary_workplace_name=ui["secondary_workplace_name"],
     )
@@ -1000,7 +944,7 @@ def main() -> None:
         with c2:
             st.plotly_chart(gallery["infra_score_bar"], width="stretch")
             st.plotly_chart(gallery["recommendation_bubble"], width="stretch")
-        commute_timeseries = _load_commute_timeseries()
+        commute_timeseries = _get_commute_timeseries(bundle)
         if not commute_timeseries.empty:
             destination_options = commute_timeseries["destination_name"].drop_duplicates().tolist()
             selected_destination = st.selectbox(

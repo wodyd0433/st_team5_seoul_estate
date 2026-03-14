@@ -160,6 +160,7 @@ def prepare_commute_frame(
     primary_workplace_name: str,
     feature_table: pd.DataFrame,
     commute_models: pd.DataFrame,
+    commute_weighted_avg: pd.DataFrame | None = None,
     household_type: str = "2인 맞벌이",
     secondary_workplace_name: str | None = None,
 ) -> tuple[pd.DataFrame, dict[str, object]]:
@@ -169,6 +170,9 @@ def prepare_commute_frame(
     model_lookup = commute_models.set_index("hub_name").to_dict("index")
     primary_model = model_lookup[primary_workplace_name]
     secondary_model = model_lookup.get(secondary_workplace_name) if secondary_workplace_name else None
+    weighted_lookup = {}
+    if isinstance(commute_weighted_avg, pd.DataFrame) and not commute_weighted_avg.empty:
+        weighted_lookup = commute_weighted_avg.set_index(["hub_name", "gu"])["avg_commute_minutes"].to_dict()
 
     rows: list[dict[str, object]] = []
     for gu in feature_table["gu"].dropna().unique():
@@ -176,20 +180,24 @@ def prepare_commute_frame(
         if not center:
             continue
         primary_distance_km = _haversine_km(center["lat"], center["lon"], primary["lat"], primary["lon"])
-        primary_minutes = (
-            primary_model["intercept"]
-            + primary_distance_km * primary_model["distance_coef"]
-            + primary_model["avg_transfer"] * primary_model["transfer_coef"]
-        )
+        primary_minutes = weighted_lookup.get((primary_workplace_name, gu))
+        if primary_minutes is None or pd.isna(primary_minutes):
+            primary_minutes = (
+                primary_model["intercept"]
+                + primary_distance_km * primary_model["distance_coef"]
+                + primary_model["avg_transfer"] * primary_model["transfer_coef"]
+            )
         secondary_distance_km = None
         secondary_minutes = None
         if dual_income and secondary is not None and secondary_model is not None:
             secondary_distance_km = _haversine_km(center["lat"], center["lon"], secondary["lat"], secondary["lon"])
-            secondary_minutes = (
-                secondary_model["intercept"]
-                + secondary_distance_km * secondary_model["distance_coef"]
-                + secondary_model["avg_transfer"] * secondary_model["transfer_coef"]
-            )
+            secondary_minutes = weighted_lookup.get((secondary_workplace_name, gu))
+            if secondary_minutes is None or pd.isna(secondary_minutes):
+                secondary_minutes = (
+                    secondary_model["intercept"]
+                    + secondary_distance_km * secondary_model["distance_coef"]
+                    + secondary_model["avg_transfer"] * secondary_model["transfer_coef"]
+                )
             combined_minutes = primary_minutes * 0.55 + secondary_minutes * 0.45
             worst_minutes = max(primary_minutes, secondary_minutes)
         else:

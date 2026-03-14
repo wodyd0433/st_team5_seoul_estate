@@ -77,6 +77,11 @@ DATASET_PATHS = {
     "income_newlyweds": DATA_DIR / "newlywed_income_by_region.csv",
     "debt_newlyweds": DATA_DIR / "newlywed_debt_by_region.csv",
     "income_debt_distribution": DATA_DIR / "newlywed_income_debt_distribution.csv",
+    "commute_avg_gwanghwamun": DATA_DIR / "구단위 세종로 평균 소요시간_20260224.csv",
+    "commute_avg_gangnam": DATA_DIR / "구단위 역삼동 평균 소요시간_20260224.csv",
+    "commute_avg_yeouido": DATA_DIR / "구단위 여의도동 평균 소요시간_20260224.csv",
+    "commute_avg_seongsu_1": DATA_DIR / "구단위 성수동1가 평균 소요시간_20260224.csv",
+    "commute_avg_seongsu_2": DATA_DIR / "구단위 성수동2가 평균 소요시간_20260224.csv",
 }
 
 SEOUL_GUS = [
@@ -168,10 +173,10 @@ GU_CENTERS = {
 }
 
 WORKPLACE_HUBS = {
-    "광화문역": {"lat": 37.5714, "lon": 126.9768, "label": "광화문역", "base_station": "광화문"},
-    "강남역": {"lat": 37.4979, "lon": 127.0276, "label": "강남역", "base_station": "강남"},
-    "성수역": {"lat": 37.5446, "lon": 127.0557, "label": "성수역", "base_station": "성수"},
-    "여의도역": {"lat": 37.5219, "lon": 126.9245, "label": "여의도역", "base_station": "여의도"},
+    "광화문역": {"lat": 37.5714, "lon": 126.9768, "label": "광화문역(광화문 기준)", "base_station": "광화문"},
+    "강남역": {"lat": 37.4979, "lon": 127.0276, "label": "강남역(역삼동 기준)", "base_station": "강남"},
+    "성수역": {"lat": 37.5446, "lon": 127.0557, "label": "성수역(성수동 기준)", "base_station": "성수"},
+    "여의도역": {"lat": 37.5219, "lon": 126.9245, "label": "여의도역(여의도동 기준)", "base_station": "여의도"},
 }
 
 COMMUTE_ZONE_PATHS = {
