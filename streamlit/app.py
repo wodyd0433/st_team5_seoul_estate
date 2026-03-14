@@ -428,7 +428,6 @@ def _collect_sidebar_inputs(bundle: dict[str, object]) -> tuple[pd.Series | None
 
     use_deposit_budget_filter = st.sidebar.checkbox(
         "전세보증금 예산 구간 설정",
-        value=bool(st.session_state.get("use_deposit_budget_filter", False)),
         key="use_deposit_budget_filter",
     )
     if use_deposit_budget_filter:
@@ -447,7 +446,6 @@ def _collect_sidebar_inputs(bundle: dict[str, object]) -> tuple[pd.Series | None
 
     use_monthly_budget_filter = st.sidebar.checkbox(
         "월세 예산 구간 설정",
-        value=bool(st.session_state.get("use_monthly_budget_filter", False)),
         key="use_monthly_budget_filter",
     )
     if use_monthly_budget_filter:
@@ -466,7 +464,6 @@ def _collect_sidebar_inputs(bundle: dict[str, object]) -> tuple[pd.Series | None
     cash_assets_krw = st.sidebar.number_input(
         "현금자산",
         min_value=0,
-        value=int(st.session_state.get("cash_assets_krw", 0)),
         step=10_000_000,
         key="cash_assets_krw",
     )
@@ -474,7 +471,6 @@ def _collect_sidebar_inputs(bundle: dict[str, object]) -> tuple[pd.Series | None
         "저축비율(소득 대비, %)",
         min_value=0.0,
         max_value=100.0,
-        value=float(st.session_state.get("saving_ratio_pct", 10.0)),
         step=1.0,
         key="saving_ratio_pct",
     )
@@ -998,6 +994,102 @@ def _render_landing_tab(
     with st.expander("추천 값 검증 자료", expanded=False):
         st.markdown(recommendation_audit_md)
 
+def _show_intro(bundle: dict[str, object]) -> None:
+    st.title(PAGE_TITLE)
+    if bundle.get("data_mode") == "compact":
+        st.caption("현재 `datasets/deploy` 기반 경량 배포 모드로 실행 중입니다.")
+
+
+def _render_landing_tab() -> None:
+    st.markdown('<div class="section-title">프로젝트 안내</div>', unsafe_allow_html=True)
+    st.markdown(
+        """
+        **팀명:** 데이터 그래비티  
+        **프로젝트명:** 신혼부부를 위한 서울 아파트 전월세 최적 입지 추천 분석  
+        **진행 기간:** 2026년 2월 20일 ~ 3월 27일  
+        **핵심 질문:** 회사 위치와 예산을 고려했을 때, 어디에 신혼집을 구하는 게 가장 합리적인가?
+        """
+    )
+    st.markdown(
+        """
+        가격, 통근, 생활환경, 안전성을 함께 점수화해 서울 자치구 추천 결과를 보여줍니다.
+        매물 검색보다 `내 조건에 맞는 입지 추천`에 초점을 둔 대시보드입니다.
+        """
+    )
+    st.markdown(
+        """
+        **누가 쓰면 좋은가**
+        - 예비 신혼부부
+        - 서울 이사를 고민하는 1~2인 직장인 가구
+        - 주거 데이터 분석에 관심 있는 사용자
+        """
+    )
+    st.markdown(
+        """
+        **해결하는 문제**
+        - 입지 결정까지 걸리는 탐색 시간을 줄입니다.
+        - 추천 결과 확인 이후 전월세 대출 비교와 상담 전환으로 이어지는 흐름을 돕습니다.
+        """
+    )
+    st.markdown(
+        """
+        **데이터 출처**
+        - 국토교통부 실거래가 데이터
+        - 서울시 공원, 병원, 대형마트 데이터
+        - 서울시 범죄 통계와 경찰 만족도 데이터
+        - 자치구별 목적지 평균 소요시간 원천 CSV
+        - KOSIS `DT_1NW1036` 신혼부부 소득 및 금융권 대출 잔액 분포
+        """
+    )
+    st.markdown(
+        """
+        **페르소나 선정**
+        - 소득: 전체 분포의 `P25 / P50 / P75`
+        - 부채: 해당 소득구간 내부 대출잔액 분포의 `P25 / P50 / P75`
+        - 2인 맞벌이는 1인 기준 소득, 부채, 구매 시뮬레이션 값을 2배 적용
+        """
+    )
+def _render_landing_tab() -> None:
+    st.markdown('<div class="section-title">프로젝트 안내</div>', unsafe_allow_html=True)
+    st.markdown(
+        """
+        **팀명:** 데이터 그래비티  
+        **프로젝트명:** 신혼부부를 위한 서울 아파트 전월세 최적 입지 추천 분석  
+        **진행 기간:** 2026년 2월 20일 ~ 3월 27일  
+        **핵심 질문:** 회사 위치와 예산을 고려했을 때, 어디에 신혼집을 구하는 게 가장 합리적인가?
+        """
+    )
+    st.markdown(
+        """
+        가격, 통근, 생활환경, 안전성을 함께 점수화해 서울 자치구 추천 결과를 보여줍니다.
+        매물 검색보다 `내 조건에 맞는 입지 추천`에 초점을 둔 대시보드입니다.
+        """
+    )
+    st.markdown(
+        """
+        **누가 쓰면 좋은가**
+        - 예비 신혼부부
+        - 서울 이사를 고민하는 1~2인 직장인 가구
+        - 주거 데이터 분석에 관심 있는 사용자
+
+        **해결하는 문제**
+        - 입지 결정까지 걸리는 탐색 시간을 줄입니다.
+        - 추천 결과 확인 이후 전월세 대출 비교와 상담 전환으로 이어지는 흐름을 돕습니다.
+
+        **데이터 출처**
+        - 국토교통부 실거래가 데이터
+        - 서울시 공원, 병원, 대형마트 데이터
+        - 서울시 범죄 통계와 경찰 만족도 데이터
+        - 자치구별 목적지 평균 소요시간 원천 CSV
+        - KOSIS `DT_1NW1036` 신혼부부 소득 및 금융권 대출 잔액 분포
+
+        **페르소나와 점수**
+        - 소득과 부채는 각각 `P25 / P50 / P75` 기준으로 9개 페르소나로 구분합니다.
+        - 가격, 통근, 인프라, 치안, 전세가율을 0~100점으로 환산합니다.
+        - 가중치를 반영한 종합점수로 추천 지역 TOP 5를 제시합니다.
+        """
+    )
+
 
 def main() -> None:
     try:
@@ -1032,11 +1124,6 @@ def main() -> None:
         ui["secondary_workplace_name"],
     )
     rank_chart = build_top_rank_chart(recommendations)
-    project_readme_md = _read_markdown(PROJECT_README_PATH)
-    docs_readme_md = _read_markdown(DOCS_README_PATH)
-    recommendation_audit_md = _read_markdown(RECOMMENDATION_AUDIT_PATH)
-    scoring_lineage_md = _read_markdown(SCORING_LINEAGE_PATH)
-
     tabs = st.tabs(
         [
             "랜딩",
@@ -1049,12 +1136,7 @@ def main() -> None:
     )
 
     with tabs[0]:
-        _render_landing_tab(
-            project_readme_md,
-            docs_readme_md,
-            recommendation_audit_md,
-            scoring_lineage_md,
-        )
+        _render_landing_tab()
 
     with tabs[1]:
         _render_summary_tab(
