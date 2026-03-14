@@ -1419,6 +1419,86 @@ def _render_persona_tab(persona_row: pd.Series | None, persona_simulation: pd.Da
     st.dataframe(sim_table, width="stretch", height=420)
 
 
+def _build_raw_eda_inputs(bundle: dict[str, object], ui: dict[str, object]) -> tuple[dict[str, pd.Series], dict[str, dict[str, float]]]:
+    rent = bundle["rent"].copy()
+    sale = bundle["sale"].copy()
+    crime = bundle["crime"].copy()
+    commute_timeseries = bundle.get("commute_timeseries", pd.DataFrame()).copy()
+    hospital = bundle["hospital"].copy()
+    mart = bundle["mart"].copy()
+    parks = bundle["parks"].copy()
+
+    rent_year_col = "년월" if "년월" in rent.columns else next((col for col in ["?꾩썡"] if col in rent.columns), None)
+    rent_area_col = "전용면적_m2" if "전용면적_m2" in rent.columns else next((col for col in ["?꾩슜硫댁쟻_m2"] if col in rent.columns), None)
+    rent_deposit_col = "보증금_만원_krw" if "보증금_만원_krw" in rent.columns else next((col for col in ["蹂댁쬆湲?留뚯썝_krw", "보증금_만원"] if col in rent.columns), None)
+    rent_monthly_col = "월세_만원_krw" if "월세_만원_krw" in rent.columns else next((col for col in ["?붿꽭_留뚯썝_krw", "월세_만원"] if col in rent.columns), None)
+
+    if rent_year_col is None or rent_area_col is None or rent_deposit_col is None or rent_monthly_col is None:
+        raise KeyError("Rent source columns are missing required fields for raw EDA.")
+
+    rent["year"] = pd.to_numeric(rent[rent_year_col].astype(str).str[:4], errors="coerce")
+    sale["dealYear"] = pd.to_numeric(sale["dealYear"], errors="coerce")
+    rent = remove_iqr_outliers(rent, [rent_deposit_col, rent_monthly_col, rent_area_col])
+    sale = remove_iqr_outliers(sale, ["dealAmount_krw", "excluUseAr"])
+
+    min_m2 = ui["min_area_pyeong"] * 3.3058
+    max_m2 = ui["max_area_pyeong"] * 3.3058
+    rent = rent.loc[
+        pd.to_numeric(rent[rent_area_col], errors="coerce").between(min_m2, max_m2, inclusive="both")
+        & pd.to_numeric(rent["year"], errors="coerce").eq(ui["selected_year"])
+    ].copy()
+    sale = sale.loc[
+        pd.to_numeric(sale["excluUseAr"], errors="coerce").between(min_m2, max_m2, inclusive="both")
+        & pd.to_numeric(sale["dealYear"], errors="coerce").eq(ui["selected_year"])
+    ].copy()
+
+    sale_gu_median = sale.groupby("gu", as_index=False)["dealAmount_krw"].median().rename(columns={"dealAmount_krw": "sale_median_krw"})
+    rent_with_sale = rent.merge(sale_gu_median, on="gu", how="left")
+    risk_series = (
+        pd.to_numeric(rent_with_sale[rent_deposit_col], errors="coerce")
+        / pd.to_numeric(rent_with_sale["sale_median_krw"], errors="coerce").replace(0, pd.NA)
+        * 100
+    )
+
+    primary_commute = commute_timeseries.loc[commute_timeseries["hub_name"].eq(ui["workplace_name"])].copy()
+    if ui.get("secondary_workplace_name"):
+        secondary_commute = commute_timeseries.loc[
+            commute_timeseries["hub_name"].eq(ui["secondary_workplace_name"])
+        ].copy()
+        commute_source = primary_commute.merge(
+            secondary_commute[["gu", "time_order", "avg_minutes"]].rename(columns={"avg_minutes": "secondary_avg_minutes"}),
+            on=["gu", "time_order"],
+            how="inner",
+        )
+        commute_series = commute_source["avg_minutes"] * 0.55 + commute_source["secondary_avg_minutes"] * 0.45
+    else:
+        commute_series = pd.to_numeric(primary_commute["avg_minutes"], errors="coerce")
+
+    infra_series = pd.Series([1.5] * len(hospital) + [2.0] * len(mart) + [1.0] * len(parks), dtype="float64")
+
+    raw_series = {
+        "price": pd.to_numeric(rent[rent_deposit_col], errors="coerce"),
+        "commute": pd.to_numeric(commute_series, errors="coerce"),
+        "infra": infra_series,
+        "safety": pd.to_numeric(crime.get("crime_count"), errors="coerce"),
+        "risk": pd.to_numeric(risk_series, errors="coerce"),
+    }
+    thresholds = {}
+    for metric_name, series in raw_series.items():
+        clean = pd.to_numeric(series, errors="coerce").dropna()
+        mean = float(clean.mean()) if not clean.empty else 0.0
+        std = float(clean.std(ddof=0)) if not clean.empty else 0.0
+        thresholds[metric_name] = {
+            "mean": mean,
+            "std": std,
+            "lower_1_5_std": mean - 1.5 * std,
+            "lower_0_5_std": mean - 0.5 * std,
+            "upper_0_5_std": mean + 0.5 * std,
+            "upper_1_5_std": mean + 1.5 * std,
+        }
+    return raw_series, thresholds
+
+
 def main() -> None:
     try:
         bundle = load_dataset_bundle()
