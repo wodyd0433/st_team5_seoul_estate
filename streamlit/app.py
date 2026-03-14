@@ -12,6 +12,7 @@ from src.io_utils import load_dataset_bundle
 from src.persona import build_income_percentile_reference, build_persona_simulation
 from src.scoring_engine import prepare_commute_frame, score_recommendations
 from src.visualization import (
+    build_commute_timeseries_chart,
     build_recommendation_map,
     build_recommendation_summary,
     build_short_reco_label,
@@ -83,10 +84,18 @@ def _read_markdown(path: Path) -> str:
 
 
 def _apply_persona_defaults(persona_row: pd.Series) -> None:
-    deposit_max = int(persona_row["deposit_budget_cap_krw"])
-    monthly_max = int(persona_row["monthly_budget_cap_krw"])
-    st.session_state["budget_cap_range"] = (max(100_000_000, int(deposit_max * 0.6)), deposit_max)
-    st.session_state["monthly_budget_range"] = (max(300_000, int(monthly_max * 0.6)), monthly_max)
+    deposit_slider_min = 100_000_000
+    deposit_slider_max = 1_500_000_000
+    monthly_slider_min = 300_000
+    monthly_slider_max = 4_000_000
+
+    deposit_max = min(int(persona_row["deposit_budget_cap_krw"]), deposit_slider_max)
+    monthly_max = min(int(persona_row["monthly_budget_cap_krw"]), monthly_slider_max)
+    deposit_min = max(deposit_slider_min, min(int(deposit_max * 0.6), deposit_max))
+    monthly_min = max(monthly_slider_min, min(int(monthly_max * 0.6), monthly_max))
+
+    st.session_state["budget_cap_range"] = (deposit_min, deposit_max)
+    st.session_state["monthly_budget_range"] = (monthly_min, monthly_max)
 
 
 def _get_applied_weights() -> dict[str, int]:
@@ -311,6 +320,52 @@ def _build_score_distribution_chart(recommendations: pd.DataFrame):
     )
     fig.update_layout(showlegend=False, margin={"l": 20, "r": 20, "t": 48, "b": 20})
     return fig
+
+
+@st.cache_data(show_spinner=False)
+def _load_commute_timeseries() -> pd.DataFrame:
+    file_patterns = [
+        "구단위 세종로 평균 소요시간_20260224.csv",
+        "구단위 역삼동 평균 소요시간_20260224.csv",
+        "구단위 여의도동 평균 소요시간_20260224.csv",
+        "구단위 성수동1가 평균 소요시간_20260224.csv",
+        "구단위 성수동2가 평균 소요시간_20260224.csv",
+    ]
+    rename_map = {
+        "세종로": "광화문",
+        "역삼동": "역삼동",
+        "여의도동": "여의도동",
+        "성수동1가": "성수동",
+        "성수동2가": "성수동",
+    }
+
+    frames: list[pd.DataFrame] = []
+    for filename in file_patterns:
+        path = DATA_DIR / filename
+        if not path.exists():
+            continue
+        frame = pd.read_csv(path, encoding="utf-8-sig")
+        frame["destination_name"] = frame["arrEmdNm"].map(rename_map).fillna(frame["arrEmdNm"])
+        frame["gu"] = frame["stgSggNm"].astype(str)
+        frame["tzon"] = pd.to_numeric(frame["tzon"], errors="coerce")
+        frame["quater"] = pd.to_numeric(frame["quater"], errors="coerce")
+        frame["useTm"] = pd.to_numeric(frame["useTm"], errors="coerce")
+        frame["time_order"] = frame["tzon"] * 100 + frame["quater"]
+        frame["time_label"] = frame["tzon"].fillna(0).astype(int).map(lambda value: f"{value:02d}") + ":" + frame["quater"].fillna(0).astype(int).map(lambda value: f"{value:02d}")
+        frame["avg_minutes"] = frame["useTm"] / 60.0
+        frames.append(frame[["destination_name", "gu", "time_order", "time_label", "avg_minutes"]])
+
+    if not frames:
+        return pd.DataFrame(columns=["destination_name", "gu", "time_order", "time_label", "avg_minutes"])
+
+    combined = pd.concat(frames, ignore_index=True)
+    combined = (
+        combined.groupby(["destination_name", "gu", "time_order", "time_label"], as_index=False)
+        .agg(avg_minutes=("avg_minutes", "mean"))
+        .sort_values(["destination_name", "gu", "time_order"])
+        .reset_index(drop=True)
+    )
+    return combined
 
 
 def _show_intro(bundle: dict[str, object]) -> None:
@@ -914,6 +969,19 @@ def main() -> None:
         with c2:
             st.plotly_chart(gallery["infra_score_bar"], width="stretch")
             st.plotly_chart(gallery["recommendation_bubble"], width="stretch")
+        commute_timeseries = _load_commute_timeseries()
+        if not commute_timeseries.empty:
+            destination_options = commute_timeseries["destination_name"].drop_duplicates().tolist()
+            selected_destination = st.selectbox(
+                "시간대별 평균 소요시간 목적지",
+                destination_options,
+                index=0,
+                key="commute_timeseries_destination",
+            )
+            destination_frame = commute_timeseries.loc[
+                commute_timeseries["destination_name"].eq(selected_destination)
+            ].copy()
+            st.plotly_chart(build_commute_timeseries_chart(destination_frame, selected_destination), width="stretch")
 
     with tabs[3]:
         st.markdown('<div class="section-title">치안·재개발 분석</div>', unsafe_allow_html=True)

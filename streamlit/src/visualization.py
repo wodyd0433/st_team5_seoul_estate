@@ -212,6 +212,28 @@ def build_visualization_gallery(
     return figs
 
 
+def build_commute_timeseries_chart(frame: pd.DataFrame, destination_name: str) -> go.Figure:
+    view = frame.copy()
+    if view.empty:
+        fig = go.Figure()
+        fig.update_layout(title=f"{destination_name} 시간대별 구단위 평균 소요시간")
+        return _apply_common_layout(fig)
+
+    fig = px.line(
+        view,
+        x="time_label",
+        y="avg_minutes",
+        color="gu",
+        markers=True,
+        title=f"{destination_name} 시간대별 구단위 평균 소요시간",
+        labels={"time_label": "시간", "avg_minutes": "평균 소요시간(분)", "gu": "자치구"},
+    )
+    fig.update_traces(mode="lines+markers")
+    fig.update_xaxes(categoryorder="array", categoryarray=view["time_label"].drop_duplicates().tolist())
+    fig.update_yaxes(ticksuffix="분")
+    return _apply_common_layout(fig)
+
+
 def build_recommendation_summary(recommendations: pd.DataFrame, household_type: str) -> pd.DataFrame:
     top = recommendations.head(5).copy()
     summary = pd.DataFrame(
