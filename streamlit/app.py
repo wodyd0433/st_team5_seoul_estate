@@ -119,6 +119,68 @@ def _build_income_reference(bundle: dict[str, object]) -> dict[str, object] | No
         return None
 
 
+def _persona_scale_factor(household_type: str) -> int:
+    return 2 if str(household_type).startswith("2") else 1
+
+
+def _scale_persona_row(persona_row: pd.Series | None, household_type: str) -> pd.Series | None:
+    if persona_row is None:
+        return None
+    factor = _persona_scale_factor(household_type)
+    if factor == 1:
+        return persona_row
+
+    scaled = persona_row.copy()
+    scale_columns = [
+        "monthly_income_estimate_krw",
+        "annual_income_estimate_krw",
+        "debt_balance_estimate_krw",
+        "monthly_debt_service_estimate_krw",
+        "monthly_living_cost_estimate_krw",
+        "monthly_saving_estimate_krw",
+        "current_seed_estimate_krw",
+        "seed_money_2y_krw",
+        "seed_money_3y_krw",
+        "buying_power_2y_krw",
+        "buying_power_3y_krw",
+        "deposit_budget_cap_krw",
+        "monthly_budget_cap_krw",
+        "income_p25_annual_krw",
+        "income_p50_annual_krw",
+        "income_p75_annual_krw",
+        "debt_p25_krw",
+        "debt_p50_krw",
+        "debt_p75_krw",
+    ]
+    for column in scale_columns:
+        if column in scaled.index and pd.notna(scaled[column]):
+            scaled[column] = float(scaled[column]) * factor
+
+    scaled["persona_summary"] = f"{scaled['persona_summary']} ({household_type} 기준 {factor}배 적용)"
+    return scaled
+
+
+def _scale_income_reference(income_reference: dict[str, object] | None, household_type: str) -> dict[str, object] | None:
+    if income_reference is None:
+        return None
+    factor = _persona_scale_factor(household_type)
+    if factor == 1:
+        return income_reference
+
+    scaled = dict(income_reference)
+    for key in [
+        "p25_annual_krw",
+        "p50_annual_krw",
+        "p75_annual_krw",
+        "p25_monthly_krw",
+        "p50_monthly_krw",
+        "p75_monthly_krw",
+    ]:
+        if key in scaled and pd.notna(scaled[key]):
+            scaled[key] = float(scaled[key]) * factor
+    return scaled
+
+
 def _resolve_persona_income_band(persona_row: pd.Series | None, income_reference: dict[str, object] | None) -> str | None:
     if persona_row is None:
         return None
@@ -129,17 +191,20 @@ def _resolve_persona_income_band(persona_row: pd.Series | None, income_reference
     return None
 
 
-def _ensure_persona_state(persona_profiles: pd.DataFrame) -> pd.Series | None:
+def _ensure_persona_state(persona_profiles: pd.DataFrame, household_type: str) -> pd.Series | None:
     if persona_profiles.empty:
         return None
 
     persona_options = persona_profiles["persona_name"].tolist()
     selected_persona = st.sidebar.selectbox("페르소나 선택", persona_options, key="persona_name")
     persona_row = persona_profiles.loc[persona_profiles["persona_name"].eq(selected_persona)].iloc[0]
+    persona_row = _scale_persona_row(persona_row, household_type)
+    persona_state_key = f"{selected_persona}|{household_type}"
 
-    if st.session_state.get("last_persona_name") != selected_persona:
+    if st.session_state.get("last_persona_state_key") != persona_state_key:
         _apply_persona_defaults(persona_row)
         st.session_state["last_persona_name"] = selected_persona
+        st.session_state["last_persona_state_key"] = persona_state_key
 
     if st.sidebar.button("페르소나 기본값 다시 적용", use_container_width=True):
         _apply_persona_defaults(persona_row)
@@ -289,7 +354,6 @@ def _show_data_load_error(exc: Exception) -> None:
 
 
 def _collect_sidebar_inputs(bundle: dict[str, object]) -> tuple[pd.Series | None, dict[str, object]]:
-    persona_row = _ensure_persona_state(bundle.get("persona_profiles", pd.DataFrame()))
     available_years = _resolve_available_years(bundle)
     applied_weights_pct = _get_applied_weights()
     st.session_state.setdefault("budget_cap_range", (400_000_000, 700_000_000))
@@ -298,6 +362,7 @@ def _collect_sidebar_inputs(bundle: dict[str, object]) -> tuple[pd.Series | None
 
     selected_year = st.sidebar.selectbox("기준 연도", available_years, index=0)
     household_type = st.sidebar.selectbox("가구 유형", HOUSEHOLD_OPTIONS, index=1)
+    persona_row = _ensure_persona_state(bundle.get("persona_profiles", pd.DataFrame()), household_type)
     workplace_name = st.sidebar.selectbox("직장 위치 1", list(WORKPLACE_HUBS.keys()), index=0)
 
     secondary_workplace_name = None
@@ -792,7 +857,7 @@ def main() -> None:
     _show_intro(bundle)
     persona_row, ui = _collect_sidebar_inputs(bundle)
     outputs = _compute_outputs(bundle, ui)
-    income_reference = _build_income_reference(bundle)
+    income_reference = _scale_income_reference(_build_income_reference(bundle), ui["household_type"])
 
     recommendations = outputs["recommendations"]
     feature_table = outputs["feature_table"]
