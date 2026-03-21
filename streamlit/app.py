@@ -518,7 +518,10 @@ def _compute_outputs(bundle: dict[str, object], ui: dict[str, object]) -> dict[s
         desired_contract_type=desired_type,
     )
 
-    # 1. 사용자 정보 기반 추가 필터링 (Limit A & 부담률)
+    # 1. 예산/부담률 필터 전의 전체 점수 데이터 저장
+    full_recommendations = recommendations.copy()
+
+    # 2. 사용자 정보 기반 추가 필터링 (Limit A & 부담률)
     # 현재 시점(today)은 메타데이터(2026-03-21) 기준
     today = datetime.date(2026, 3, 21)
     move_in = st.session_state.get("move_in_date_eda", datetime.date(2026, 10, 1))
@@ -558,6 +561,7 @@ def _compute_outputs(bundle: dict[str, object], ui: dict[str, object]) -> dict[s
         "commute_frame": commute_frame,
         "commute_meta": commute_meta,
         "recommendations": recommendations,
+        "full_recommendations": full_recommendations,
         "scoring_meta": scoring_meta,
         "raw_eda_series": raw_eda_series,
         "raw_thresholds": raw_thresholds,
@@ -773,7 +777,7 @@ def _render_summary_tab(
         st.warning(f"'{selected_label}' 지표에 대한 차트 데이터가 없습니다.")
 
 
-def _render_compare_tab(recommendations: pd.DataFrame) -> None:
+def _render_compare_tab(outputs: dict, full_recommendations: pd.DataFrame, recommendations: pd.DataFrame) -> None:
     st.markdown('<div class="section-title">구별 상세 비교</div>', unsafe_allow_html=True)
     if recommendations.empty:
         st.warning("현재 조건에 맞는 비교 대상이 없습니다.")
@@ -781,12 +785,19 @@ def _render_compare_tab(recommendations: pd.DataFrame) -> None:
 
     # --- 자치구별 상세 점수 분석 시각화 추가 ---
     st.markdown("### 자치구별 상세 지표 분석")
-    st.info("비교하고 싶은 특정 자치구를 선택하면 5대 점수 지표를 시각화하여 확인하실 수 있습니다.")
+    st.info("비교하고 싶은 특정 자치구를 선택하면 5대 점수 지표를 시각화하여 확인하실 수 있습니다. (전체 25개 구 선택 가능)")
     
     col1, col2 = st.columns([1, 2])
+    all_gus = sorted(full_recommendations['gu'].unique())
     with col1:
-        target_gu = st.selectbox("분석 할 자치구 선택", recommendations['gu'].unique(), index=0)
-        target_row = recommendations[recommendations['gu'] == target_gu].iloc[0]
+        target_gu = st.selectbox("분석 할 자치구 선택", all_gus, index=0)
+        target_row = full_recommendations[full_recommendations['gu'] == target_gu].iloc[0]
+        
+        # 필터링 제외 여부 확인
+        is_recommended = target_gu in recommendations['gu'].values
+        if not is_recommended:
+            st.warning("⚠️ 이 지역은 현재 설정된 예산/부담률 조건에 맞는 매물이 부족하여 추천 리스트에서 제외되었습니다.")
+        
         st.metric(label=f"{target_gu} 종합 점수", value=f"{target_row['total_score']:.1f}점")
         st.write(f"**등급**: {target_row['total_grade']}등급")
         st.write(f"**별점**: {target_row['total_star_label']}")
@@ -797,7 +808,7 @@ def _render_compare_tab(recommendations: pd.DataFrame) -> None:
         st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
-    st.markdown("### 자치구별 지표 비교 일람 (TOP 15)")
+    st.markdown("### 자치구별 지표 비교 일람 (TOP 15 추천)")
     compare_cols = [
         "gu",
         "total_score",
@@ -1123,9 +1134,10 @@ def main() -> None:
         outputs = _compute_outputs(bundle, ui)
         
         recommendations = outputs["recommendations"]
+        full_recommendations = outputs["full_recommendations"]
         feature_table = outputs["feature_table"]
 
-        gallery = build_visualization_gallery(feature_table, recommendations, bundle, ui["selected_year"])
+        gallery = build_visualization_gallery(feature_table, full_recommendations, bundle, ui["selected_year"])
         recommendation_summary = build_recommendation_summary(
             recommendations, 
             ui["household_type"],
@@ -1136,7 +1148,7 @@ def main() -> None:
             ui["workplace_name"],
             ui["secondary_workplace_name"],
         )
-        rank_chart = build_top_rank_chart(recommendations)
+        rank_chart = build_top_rank_chart(full_recommendations)
         tabs = st.tabs(
             [
                 "프로젝트 개요",
@@ -1169,7 +1181,7 @@ def main() -> None:
             )
 
         with tabs[3]:
-            _render_compare_tab(recommendations)
+            _render_compare_tab(outputs, full_recommendations, recommendations)
             st.plotly_chart(gallery["score_stacked_bar"], width="stretch")
 
         with tabs[4]:

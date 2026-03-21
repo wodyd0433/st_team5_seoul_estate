@@ -467,7 +467,7 @@ def build_recommendation_map(
 
 
 def build_top_rank_chart(recommendations: pd.DataFrame) -> go.Figure:
-    top = recommendations.head(15).sort_values("total_score", ascending=True)
+    top = recommendations.sort_values("total_score", ascending=True)
     fig = px.bar(
         top,
         x="total_score",
