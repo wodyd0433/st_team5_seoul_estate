@@ -686,6 +686,7 @@ def _render_summary_tab(
     rank_chart,
     ui: dict[str, object],
     filter_notice: str | None = None,
+    radar_chart: go.Figure | None = None,
 ) -> None:
     st.markdown('<div class="section-title">추천 요약</div>', unsafe_allow_html=True)
     
@@ -768,6 +769,10 @@ def _render_summary_tab(
         st.pydeck_chart(recommendation_map, width="stretch")
     with right:
         st.plotly_chart(rank_chart, width="stretch")
+
+    if radar_chart:
+        st.plotly_chart(radar_chart, use_container_width=True)
+
     st.dataframe(recommendation_summary, width="stretch", height=320)
 
 
@@ -1147,6 +1152,7 @@ def main() -> None:
                 rank_chart,
                 ui,
                 outputs["filter_notice"],
+                radar_chart=gallery.get("score_radar"),
             )
 
         with tabs[3]:

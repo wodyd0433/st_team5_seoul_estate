@@ -219,7 +219,54 @@ def build_visualization_gallery(
     figs["recommendation_bubble"].update_xaxes(tickformat=",")
     figs["recommendation_bubble"].update_yaxes(tickformat=",")
 
+    figs["score_radar"] = build_score_radar_chart(recommendations)
     return figs
+
+
+def build_score_radar_chart(recommendations: pd.DataFrame) -> go.Figure:
+    categories = ["가격 점수", "통근 점수", "인프라 점수", "치안 점수", "전세가율 점수"]
+    # 상위 3개 자치구 비교
+    top_recos = recommendations.head(3).copy()
+    
+    fig = go.Figure()
+    for _, row in top_recos.iterrows():
+        values = [
+            row["price_score"],
+            row["commute_score"],
+            row["infra_score"],
+            row["safety_score"],
+            row["risk_score"]
+        ]
+        # Close the loop
+        values.append(values[0])
+        fig.add_trace(go.Scatterpolar(
+            r=values,
+            theta=categories + [categories[0]],
+            fill='toself',
+            name=row["gu"],
+            line={"width": 2},
+            marker={"size": 6}
+        ))
+    
+    fig.update_layout(
+        polar=dict(
+            radialaxis=dict(
+                visible=True,
+                range=[0, 100],
+                gridcolor="rgba(148, 163, 184, 0.2)",
+                linecolor="rgba(148, 163, 184, 0.2)",
+            ),
+            angularaxis=dict(
+                gridcolor="rgba(148, 163, 184, 0.2)",
+                linecolor="rgba(148, 163, 184, 0.2)",
+            ),
+            bgcolor="rgba(0,0,0,0)",
+        ),
+        showlegend=True,
+        title="상위 추천 단지 5대 지표 비교 (0~100)",
+        legend=dict(orientation="h", y=-0.2),
+    )
+    return _apply_common_layout(fig)
 
 
 def build_commute_timeseries_chart(frame: pd.DataFrame, destination_name: str) -> go.Figure:
