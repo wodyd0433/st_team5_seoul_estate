@@ -281,7 +281,7 @@ def _show_data_load_error(exc: Exception) -> None:
     st.code(str(exc))
 
 
-def _collect_sidebar_inputs(bundle: dict[str, object]) -> tuple[pd.Series | None, dict[str, object]]:
+def _collect_sidebar_inputs(bundle: dict[str, object]) -> dict[str, object]:
     available_years = _resolve_available_years(bundle)
     applied_weights_pct = _get_applied_weights()
     st.session_state.setdefault("budget_cap_range", (400_000_000, 700_000_000))
@@ -856,149 +856,7 @@ def _render_compare_tab(recommendations: pd.DataFrame) -> None:
 
 
 
-def _render_data_tab(
-    feature_table: pd.DataFrame,
-    recommendations: pd.DataFrame,
-    rent_distribution,
-    score_distribution,
-    recommendation_audit_md: str,
-    scoring_lineage_md: str,
-) -> None:
-    st.markdown('<div class="section-title">데이터 근거</div>', unsafe_allow_html=True)
-    if feature_table.empty or recommendations.empty:
-        st.warning("현재 조건에 맞는 데이터가 없어 분포를 표시할 수 없습니다.")
-        return
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("전세 중앙값", format_korean_money(feature_table["deposit_price_krw"].median()))
-    k2.metric("월세 중앙값", format_korean_money(feature_table["monthly_rent_active_krw"].median()))
-    k3.metric("종합점수 중앙값", f"{recommendations['total_score'].median():.1f}점")
-    k4.metric("종합점수 최고", f"{recommendations['total_score'].max():.1f}점")
 
-    c1, c2 = st.columns(2)
-    with c1:
-        with st.container(border=True):
-            st.markdown("#### 추천 값 검증")
-            st.caption("추천과 시뮬레이션에 사용한 전세·월세 분포를 점검합니다.")
-            st.write("- 자치구 집계값과 추천값을 분리해 확인")
-            st.write("- 전세와 월세 분포를 동일 축에서 비교")
-        if rent_distribution is not None:
-            st.plotly_chart(rent_distribution, width="stretch")
-
-    with c2:
-        with st.container(border=True):
-            st.markdown("#### 점수 라인리지")
-            st.caption("5개 축 점수 분포와 종합점수 산식을 검토합니다.")
-            st.write("- 가격, 통근, 인프라, 치안, 전세가율 점수 공개")
-            st.write("- 고정 가중합 기반 종합점수 계산")
-        if score_distribution is not None:
-            st.plotly_chart(score_distribution, width="stretch")
-
-    with st.expander("추천 값 검증 문서 보기", expanded=False):
-        st.markdown(recommendation_audit_md)
-    with st.expander("점수 라인리지 문서 보기", expanded=False):
-        st.markdown(scoring_lineage_md)
-
-
-def _render_landing_tab(
-    project_readme_md: str,
-    docs_readme_md: str,
-    recommendation_audit_md: str,
-    scoring_lineage_md: str,
-) -> None:
-    st.markdown('<div class="section-title">대시보드 안내</div>', unsafe_allow_html=True)
-    st.markdown(
-        """
-        서울 자치구 추천 대시보드를 시작하기 전에 아래 문서에서 데이터 범위, 페르소나 기준, 점수 계산 방식을 먼저 확인할 수 있습니다.
-        사이드바에서 필터를 설정하면 나머지 탭이 같은 조건으로 동시에 갱신됩니다.
-        """
-    )
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("기본 현금자산", format_korean_money(100_000_000))
-    c2.metric("기본 저축비율", "50%")
-    c3.metric("예산 구간 필터", "기본 해제")
-
-    with st.expander("대시보드 README", expanded=True):
-        st.markdown(project_readme_md)
-
-    with st.expander("문서 구조 안내", expanded=False):
-        st.markdown(docs_readme_md)
-
-    with st.expander("데이터 출처", expanded=False):
-        st.markdown(
-            """
-            - `매매/전월세`: 국토교통부 실거래가 공개 데이터와 집계 파일
-            - `통근시간`: 자치구별 목적지 평균 소요시간 원천 CSV, 시간대별 통행량 가중평균 적용
-            - `인프라`: 서울시 공원, 대형마트, 병원 위치 데이터
-            - `치안`: 서울시 범죄 통계, 경찰 만족도 데이터
-            - `페르소나`: 통계청 KOSIS `DT_1NW1036` 신혼부부 소득 및 금융권 대출 잔액 분포
-            """
-        )
-
-    with st.expander("페르소나 선정 기준", expanded=False):
-        st.markdown(
-            """
-            - 소득 구간은 전체 분포 기준 `P25 / P50 / P75` 대표값으로 `저소득 / 중간소득 / 고소득`을 구분합니다.
-            - 부채 구간은 선택된 소득구간 내부의 금융권 대출 잔액 분포 기준 `P25 / P50 / P75` 대표값으로 `저부채 / 중간부채 / 고부채`를 구분합니다.
-            - 가구 유형이 `2인 맞벌이`이면 소득과 부채, 구매 시뮬레이션 기준값을 `1인` 대비 2배로 적용합니다.
-            """
-        )
-
-    _render_scoring_thresholds_guide()
-
-    with st.expander("점수 라인리지 문서", expanded=False):
-        st.markdown(scoring_lineage_md)
-
-    with st.expander("추천 값 검증 자료", expanded=False):
-        st.markdown(recommendation_audit_md)
-
-def _show_intro(bundle: dict[str, object]) -> None:
-    st.title(PAGE_TITLE)
-    if bundle.get("data_mode") == "compact":
-        st.caption("현재 `datasets/deploy` 기반 경량 배포 모드로 실행 중입니다.")
-
-
-def _render_landing_tab() -> None:
-    st.markdown('<div class="section-title">프로젝트 안내</div>', unsafe_allow_html=True)
-    st.markdown(
-        """
-        **팀명:** 데이터 그래비티  
-        **프로젝트명:** 신혼부부를 위한 서울 아파트 전월세 최적 입지 추천 분석  
-        **진행 기간:** 2026년 2월 20일 ~ 3월 27일  
-        **핵심 질문:** 회사 위치와 예산을 고려했을 때, 어디에 신혼집을 구하는 게 가장 합리적인가?
-        """
-    )
-    st.markdown(
-        """
-        가격, 통근, 생활환경, 안전성을 함께 점수화해 서울 자치구 추천 결과를 보여줍니다.
-        매물 검색보다 `내 조건에 맞는 입지 추천`에 초점을 둔 대시보드입니다.
-        """
-    )
-    st.markdown(
-        """
-        **누가 쓰면 좋은가**
-        - 예비 신혼부부
-        - 서울 이사를 고민하는 1~2인 직장인 가구
-        - 주거 데이터 분석에 관심 있는 사용자
-        """
-    )
-    st.markdown(
-        """
-        **해결하는 문제**
-        - 입지 결정까지 걸리는 탐색 시간을 줄입니다.
-        - 추천 결과 확인 이후 전월세 대출 비교와 상담 전환으로 이어지는 흐름을 돕습니다.
-        """
-    )
-    st.markdown(
-        """
-        **데이터 출처**
-        - 국토교통부 실거래가 데이터
-        - 서울시 공원, 병원, 대형마트 데이터
-        - 서울시 범죄 통계와 경찰 만족도 데이터
-        - 자치구별 목적지 평균 소요시간 원천 CSV
-        - KOSIS `DT_1NW1036` 신혼부부 소득 및 금융권 대출 잔액 분포
-        """
-    )
 def _render_landing_tab() -> None:
     st.markdown('<div class="section-title">프로젝트 안내</div>', unsafe_allow_html=True)
     st.markdown(
