@@ -66,6 +66,19 @@ def _build_std_thresholds(series: pd.Series) -> dict[str, float]:
     }
 
 
+def _calculate_percentile_score(series: pd.Series, higher_is_better: bool) -> pd.Series:
+    values = pd.to_numeric(series, errors="coerce")
+    if values.isna().all():
+        return pd.Series(0.0, index=series.index)
+    
+    # rank(pct=True) returns [0, 1]
+    # To avoid 0.0 for the absolute minimum, we can use (rank - 0.5) / count or just stick to standard pct
+    pct = values.rank(pct=True, method="min") * 100
+    if not higher_is_better:
+        pct = 100 - pct
+    return pct.fillna(0.0)
+
+
 def _score_star_from_thresholds(series: pd.Series, thresholds: dict[str, float], higher_is_better: bool) -> pd.Series:
     values = pd.to_numeric(series, errors="coerce")
     if higher_is_better:
@@ -213,29 +226,26 @@ def score_recommendations(
             "higher_is_better": spec["higher_is_better"],
             "source_col": spec["source_col"],
         }
-        frame[f"{metric_name}_star"] = _score_star_from_thresholds(
-            spec["series"],
-            thresholds,
-            higher_is_better=bool(spec["higher_is_better"]),
-        )
-
-    frame["price_score"] = _score_from_star(frame["price_star"])
-    frame["commute_score"] = _score_from_star(frame["commute_star"])
-    frame["infra_score"] = _score_from_star(frame["infra_star"])
-    frame["safety_score"] = _score_from_star(frame["safety_star"])
-    frame["risk_score"] = _score_from_star(frame["risk_star"])
+        # 백분위수 기반 세부 점수 계산 (0~100)
+        score = _calculate_percentile_score(spec["series"], spec["higher_is_better"])
+        frame[f"{metric_name}_score"] = score
+        # 점수에 따른 별점 환산 (0~20: 1성, ..., 80~100: 5성)
+        # 100점인 경우 5성을 유지하기 위해 20으로 나눈 뒤 올림 처리하거나 버림 후 1더함
+        stars = (score / 20).apply(lambda x: int(np.floor(x)) if x < 100 else 4) + 1
+        frame[f"{metric_name}_star"] = stars
 
     frame["budget_score"] = frame["price_score"]
     frame["jeonse_risk_score"] = frame["risk_score"]
 
     active_weights = weights or FIXED_WEIGHTS
+    # 종합 점수는 각 세부 점수(0~100)의 가중 평균
     frame["total_score"] = (
-        frame["price_star"] * active_weights["price"]
-        + frame["commute_star"] * active_weights["commute"]
-        + frame["infra_star"] * active_weights["infra"]
-        + frame["safety_star"] * active_weights["safety"]
-        + frame["risk_star"] * active_weights["risk"]
-    ) * 20
+        frame["price_score"] * active_weights["price"]
+        + frame["commute_score"] * active_weights["commute"]
+        + frame["infra_score"] * active_weights["infra"]
+        + frame["safety_score"] * active_weights["safety"]
+        + frame["risk_score"] * active_weights["risk"]
+    )
 
     total_meta = frame["total_score"].apply(_grade_from_total_score)
     frame["total_star"] = total_meta.map(lambda x: x[0]).astype(int)

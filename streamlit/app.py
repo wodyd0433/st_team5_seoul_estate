@@ -247,12 +247,13 @@ def _show_intro(bundle: dict[str, object]) -> None:
     with st.popover("대시보드 기준 설명"):
         st.markdown(
             """
-            - `가격 점수`: 전세가 중위값을 5단계 별점으로 환산합니다.
-            - `통근 점수`: 예측 통근시간을 20/30/45/60분 기준으로 평가합니다.
-            - `인프라 점수`: 대형마트, 병원, 공원 조합을 규칙 기반으로 평가합니다.
-            - `치안 점수`: 범죄 발생량과 경찰 만족도를 함께 봅니다.
-            - `전세가율 점수`: 전세가율이 높을수록 리스크가 커집니다.
-            - `가중치`: 가격, 통근, 인프라, 치안, 전세가율 비율을 직접 입력하고 100% 합계로 확정합니다.
+            - `가격 점수(전세)`: 전세 보증금 중위값의 분포(+/- 1.5 시그마)를 기준으로 상대적 순위(Percentile)를 점수화합니다.
+            - `가격 점수(월세)`: 표준화된 월세(보증금 20:월세 1 일할)의 분포를 기준으로 점수화합니다.
+            - `통근 점수`: 선택한 직장들까지의 예측 통근시간을 기반으로 평가한 점수입니다.
+            - `인프라 점수`: 자치구별 병원, 공원, 대형마트 수를 표준화(Min-Max)하여 합산한 결과입니다.
+            - `치안 점수`: 자치구별 5대 범죄 발생 건수와 경찰 서비스 만족도를 종합하여 절대적 안정성을 평가합니다.
+            - `전세가율 점수`: 자치구별 매매가 대비 전세가 비중을 계산하여 리스크가 클수록 낮은 점수를 부여합니다.
+            - `가중치`: 위 5가지 지표의 반영 비율을 직접 설정하여 합계 100%로 가중치를 부여합니다.
             
             **데이터 출처:**
             - `원천 거래`: 국토교통부 실거래가 오픈 API
@@ -294,7 +295,7 @@ def _collect_sidebar_inputs(bundle: dict[str, object]) -> dict[str, object]:
 
     year_index = available_years.index(2025) if 2025 in available_years else 0
     selected_year = st.sidebar.selectbox("기준 연도", available_years, index=year_index)
-    household_type = st.sidebar.selectbox("가구 유형", HOUSEHOLD_OPTIONS, index=1)
+    household_type = "2인 맞벌이"
     
 
     workplace_options = list(WORKPLACE_HUBS.keys())
@@ -725,22 +726,6 @@ def _render_summary_tab(
     if filter_notice:
         st.caption(f"참고: {filter_notice}")
 
-
-    st.caption(
-        f"적용 가중치: 가격 {ui['weights_pct']['price']}% / 통근 {ui['weights_pct']['commute']}% / "
-        f"인프라 {ui['weights_pct']['infra']}% / 치안 {ui['weights_pct']['safety']}% / 전세가율 {ui['weights_pct']['risk']}%"
-    )
-    deposit_caption = (
-        f"{format_korean_money(ui['deposit_budget_min_krw'])} ~ {format_korean_money(ui['deposit_budget_max_krw'])}"
-        if ui.get("use_deposit_budget_filter")
-        else "미설정"
-    )
-    monthly_caption = (
-        f"{format_korean_money(ui['monthly_budget_min_krw'])} ~ {format_korean_money(ui['monthly_budget_max_krw'])}"
-        if ui.get("use_monthly_budget_filter")
-        else "미설정"
-    )
-    st.caption(f"예산 구간: 전세 {deposit_caption} / 월세 {monthly_caption}")
 
     if recommendations.empty:
         st.warning("현재 조건에 맞는 추천 결과가 없습니다.")
