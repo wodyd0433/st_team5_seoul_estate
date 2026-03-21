@@ -724,7 +724,36 @@ def _render_summary_tab(
         st.warning("현재 조건에 맞는 추천 결과가 없습니다.")
         return
 
-    st.markdown("### 지표별 자치구 순위 (종합)")
+    # --- TOP 5 카드 복구 ---
+    st.markdown("#### 상위 추천 자치구 (TOP 5)")
+    top_cards = recommendations.head(5).copy()
+    card_cols = st.columns(5)
+    for idx, (_, row) in enumerate(top_cards.iterrows()):
+        with card_cols[idx]:
+            with st.container(border=True):
+                st.markdown(f"**TOP {idx + 1}**")
+                st.markdown(f"### {row['gu']}")
+                st.markdown(f"## {row['total_score']:.1f}점")
+                st.caption(f"{row['total_grade']}등급 · {row['total_star_label']}")
+                
+                # 핵심 지표 표시
+                if desired_type == "전세":
+                    st.write(f"전세 보증금: {format_korean_money(row['deposit_price_krw'])}")
+                    st.write(f"전세가율: {row['jeonse_ratio_pct']:.1f}%")
+                else:
+                    st.write(f"보증금: {format_korean_money(row['deposit_price_krw'])}")
+                    st.write(f"월세(표준): {format_korean_money(row.get('standardized_monthly_rent_krw', 0))}")
+                
+                if ui["household_type"].startswith("2") and pd.notna(row.get("secondary_commute_minutes")):
+                    st.write(f"직장1 통근 {row['primary_commute_minutes']:.1f}분")
+                    st.write(f"직장2 통근 {row['secondary_commute_minutes']:.1f}분")
+                else:
+                    st.write(f"통근 {row['commute_minutes']:.1f}분")
+
+    st.divider()
+
+    # --- 지표별 순위 대시보드 ---
+    st.markdown("#### 지표별 자치구 순위 확인")
     st.info("각 지표별로 모든 자치구의 순위를 확인할 수 있습니다. 보려는 지표를 선택하세요.")
     
     metric_map = {
@@ -742,20 +771,6 @@ def _render_summary_tab(
         st.plotly_chart(gallery[chart_key], use_container_width=True)
     else:
         st.warning(f"'{selected_label}' 지표에 대한 차트 데이터가 없습니다.")
-
-    st.markdown("#### 자치구별 세부 점수 테이블")
-    score_cols = ["gu", "total_score", "price_score", "commute_score", "infra_score", "safety_score", "risk_score"]
-    display_table = recommendations[score_cols].copy().sort_values("total_score", ascending=False)
-    display_table = display_table.rename(columns={
-        "gu": "자치구",
-        "total_score": "종합 점수",
-        "price_score": "가격 점수",
-        "commute_score": "통근 점수",
-        "infra_score": "인프라 점수",
-        "safety_score": "치안 점수",
-        "risk_score": "전세가율 점수"
-    })
-    st.dataframe(display_table, use_container_width=True, height=500)
 
 
 def _render_compare_tab(recommendations: pd.DataFrame) -> None:
