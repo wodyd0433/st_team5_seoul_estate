@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -663,6 +664,39 @@ def _compute_outputs(bundle: dict[str, object], ui: dict[str, object]) -> dict[s
         desired_contract_type=desired_type,
     )
 
+    # 1. 사용자 정보 기반 추가 필터링 (Limit A & 부담률)
+    # 현재 시점(today)은 메타데이터(2026-03-21) 기준
+    today = datetime.date(2026, 3, 21)
+    move_in = st.session_state.get("move_in_date_eda", datetime.date(2026, 10, 1))
+    months = max(0, (move_in.year - today.year) * 12 + (move_in.month - today.month))
+    
+    cash = st.session_state.get("cash_assets_krw_eda", 100_000_000)
+    income_val = st.session_state.get("user_income_eda", 3_400_000) + st.session_state.get("spouse_income_eda", 3_400_000)
+    income_val = max(income_val, 1) # 0으로 나누기 방지
+    saving_ratio = st.session_state.get("saving_ratio_pct_eda", 50) / 100
+    burden_range = st.session_state.get("financial_burden_rate_eda", (10.0, 40.0))
+    
+    if desired_type == "전세":
+        limit_a = (cash + (income_val * saving_ratio * months)) * 5
+        # C-2: 최악의 경우(6% 이자율) 기준 부담률
+        recommendations["burden_rate"] = ((recommendations["deposit_price_krw"] * 0.06) / 12) / income_val * 100
+    else:
+        limit_a = (cash + (income_val * saving_ratio * months))
+        # B: 표준화 월세 대비 부담률
+        recommendations["burden_rate"] = (recommendations["standardized_monthly_rent_krw"] / income_val) * 100
+
+    # 필터 적용: 가격(보증금) A 이하 및 부담률 범위 내
+    mask = (recommendations["deposit_price_krw"] <= limit_a) & \
+           (recommendations["burden_rate"] >= burden_range[0]) & \
+           (recommendations["burden_rate"] <= burden_range[1])
+    
+    recommendations = recommendations[mask].copy()
+    # 필터 결과 안내 문구 추가
+    if recommendations.empty:
+        filter_notice = f"입력하신 가용 자산({format_korean_money(limit_a)}) 및 부담률 범위({burden_range[0]}~{burden_range[1]}%) 내에 해당하는 지역이 없어 추천 결과가 비어있습니다."
+    else:
+        filter_notice = (filter_notice + " | " if filter_notice else "") + f"가용 자산 {format_korean_money(limit_a)} 이하 필터 적용됨"
+
     return {
         "feature_table": filtered_feature_table,
         "feature_meta": feature_meta,
@@ -801,8 +835,41 @@ def _render_summary_tab(
     filter_notice: str | None,
 ) -> None:
     st.markdown('<div class="section-title">추천 요약</div>', unsafe_allow_html=True)
+    
+    # 사용자 개인화 요약 문구 생성
+    today = datetime.date(2026, 3, 21)
+    move_in = st.session_state.get("move_in_date_eda", datetime.date(2026, 10, 1))
+    months = max(0, (move_in.year - today.year) * 12 + (move_in.month - today.month))
+    cash = st.session_state.get("cash_assets_krw_eda", 100_000_000)
+    income_val = st.session_state.get("user_income_eda", 3_400_000) + st.session_state.get("spouse_income_eda", 3_400_000)
+    income_val = max(income_val, 1)
+    saving_ratio = st.session_state.get("saving_ratio_pct_eda", 50) / 100
+    desired_type = st.session_state.get("desired_contract_type_eda", "전세")
+
+    if desired_type == "전세":
+        limit_a = (cash + (income_val * saving_ratio * months)) * 5
+        b1 = (limit_a * 0.04) / 12
+        b2 = (limit_a * 0.06) / 12
+        c1 = (b1 / income_val) * 100
+        c2 = (b2 / income_val) * 100
+        summary_text = (
+            f"현재 현금자산 {format_korean_money(cash)}, 합산소득 월 {format_korean_money(income_val)}, "
+            f"저축비율 {int(saving_ratio*100)}%, 전세자금대출 80%를 고려했을 때, "
+            f"**가능한 전세 구간은 {format_korean_money(limit_a)} 이하** 입니다. "
+            f"이 경우 예상 월 발생 금융 비용은 4~6% 가정할 경우 {format_korean_money(b1)} ~ {format_korean_money(b2)}이고 "
+            f"합산소득 대비 {c1:.1f}% ~ {c2:.1f}% 입니다."
+        )
+    else:
+        limit_a = (cash + (income_val * saving_ratio * months))
+        summary_text = (
+            f"현재 현금자산 {format_korean_money(cash)}, 합산소득 월 {format_korean_money(income_val)}, "
+            f"저축비율 {int(saving_ratio*100)}%를 고려했을 때 **가능한 월세 보증금 구간은 {format_korean_money(limit_a)} 이하**입니다."
+        )
+    
+    st.info(summary_text)
+
     if filter_notice:
-        st.info(filter_notice)
+        st.caption(f"참고: {filter_notice}")
     if persona_row is not None:
         persona_income_band = _resolve_persona_income_band(persona_row, income_reference)
         st.caption(
@@ -1260,13 +1327,21 @@ def _render_eda_tab(
         c1, c2, c3 = st.columns(3)
         with c1:
             st.number_input("현금자산(원)", min_value=0, step=10_000_000, key="cash_assets_krw_eda")
-            st.number_input("본인 소득(월/원)", min_value=0, step=1_000_000, key="user_income_eda")
+            st.number_input("본인 소득(월/원)", min_value=0, step=100_000, key="user_income_eda")
+            st.number_input("배우자 소득(월/원)", min_value=0, step=100_000, key="spouse_income_eda")
         with c2:
-            st.number_input("배우자 소득(월/원)", min_value=0, step=1_000_000, key="spouse_income_eda")
             st.selectbox("희망 계약 방식", ["전세", "월세"], key="desired_contract_type_eda")
-        with c3:
             st.number_input("저축 비율(%)", min_value=0, max_value=100, step=5, key="saving_ratio_pct_eda")
             st.date_input("예상 입주 시기", key="move_in_date_eda")
+        with c3:
+            st.slider(
+                "금융비용 부담률 (%)",
+                0.0, 100.0,
+                key="financial_burden_rate_eda",
+                step=1.0,
+                help="합산 소득 대비 주거 금융 비용(이자 또는 월세)의 비중 범위를 설정합니다."
+            )
+            st.caption(f"설정 범위: {st.session_state.financial_burden_rate_eda[0]}% ~ {st.session_state.financial_burden_rate_eda[1]}%")
 
     if persona_row is not None:
         st.markdown("#### 페르소나 분류 기준")
@@ -1529,6 +1604,15 @@ def _render_persona_tab(persona_row: pd.Series | None, persona_simulation: pd.Da
 
 
 def main() -> None:
+    # 사용자 정보 초기값 설정 (EDA 탭 및 필터링용)
+    st.session_state.setdefault("cash_assets_krw_eda", 100_000_000)
+    st.session_state.setdefault("user_income_eda", 3_400_000)
+    st.session_state.setdefault("spouse_income_eda", 3_400_000)
+    st.session_state.setdefault("desired_contract_type_eda", "전세")
+    st.session_state.setdefault("saving_ratio_pct_eda", 50)
+    st.session_state.setdefault("move_in_date_eda", datetime.date(2026, 10, 1))
+    st.session_state.setdefault("financial_burden_rate_eda", (10.0, 40.0))
+
     try:
         bundle = load_dataset_bundle()
     except Exception as exc:
