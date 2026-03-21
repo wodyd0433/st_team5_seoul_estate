@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 from src.cleaning import remove_iqr_outliers
@@ -1406,15 +1407,13 @@ def main() -> None:
         _render_landing_tab()
 
     with tabs[1]:
-        _render_summary_tab(
+        _render_eda_tab(
             recommendations,
-            recommendation_summary,
-            recommendation_map,
-            rank_chart,
+            outputs["raw_eda_series"],
+            outputs["scoring_meta"],
             persona_row,
-            ui,
             income_reference,
-            outputs["filter_notice"],
+            bundle,
         )
 
     with tabs[2]:
