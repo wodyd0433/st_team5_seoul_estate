@@ -679,8 +679,8 @@ def _build_raw_eda_inputs(bundle: dict[str, object], ui: dict[str, object]) -> t
 
     rent_year_col = "년월" if "년월" in rent.columns else next((col for col in ["?꾩썡"] if col in rent.columns), None)
     rent_area_col = "전용면적_m2" if "전용면적_m2" in rent.columns else next((col for col in ["?꾩슜硫댁쟻_m2"] if col in rent.columns), None)
-    rent_deposit_col = "보증금_만원_krw" if "보증금_만원_krw" in rent.columns else next((col for col in ["蹂댁쬆湲?留뚯썝_krw", "보증금_만원"] if col in rent.columns), None)
-    rent_monthly_col = "월세_만원_krw" if "월세_만원_krw" in rent.columns else next((col for col in ["?붿꽭_留뚯썝_krw", "월세_만원"] if col in rent.columns), None)
+    rent_deposit_col = "보증금_만원_krw" if "보증금_만원_krw" in rent.columns else next((col for col in ["蹂댁쬆湲?留뚯썝_krw", "보증금_만원"] if col in rent.columns), "보증금_만원_krw")
+    rent_monthly_col = "월세_만원_krw" if "월세_만원_krw" in rent.columns else next((col for col in ["?붿꽭_留뚯썝_krw", "월세_만원"] if col in rent.columns), "월세_만원_krw")
 
     if rent_year_col is None or rent_area_col is None or rent_deposit_col is None or rent_monthly_col is None:
         raise KeyError("Rent source columns are missing required fields for raw EDA.")
@@ -692,91 +692,107 @@ def _build_raw_eda_inputs(bundle: dict[str, object], ui: dict[str, object]) -> t
 
     min_m2 = ui["min_area_pyeong"] * 3.3058
     max_m2 = ui["max_area_pyeong"] * 3.3058
-    rent_price = rent.loc[
+    
+    # 2025년 기준 및 선택 연도 기준 필터링 (EDA용)
+    rent_price_all = rent.loc[
         pd.to_numeric(rent[rent_area_col], errors="coerce").between(min_m2, max_m2, inclusive="both")
         & pd.to_numeric(rent["year"], errors="coerce").eq(2025)
     ].copy()
-    rent = rent.loc[
+    rent_curr = rent.loc[
         pd.to_numeric(rent[rent_area_col], errors="coerce").between(min_m2, max_m2, inclusive="both")
         & pd.to_numeric(rent["year"], errors="coerce").eq(ui["selected_year"])
     ].copy()
-    sale = sale.loc[
+    sale_curr = sale.loc[
         pd.to_numeric(sale["excluUseAr"], errors="coerce").between(min_m2, max_m2, inclusive="both")
         & pd.to_numeric(sale["dealYear"], errors="coerce").eq(ui["selected_year"])
     ].copy()
 
-    sale_gu_median = sale.groupby("gu", as_index=False)["dealAmount_krw"].median().rename(columns={"dealAmount_krw": "sale_median_krw"})
-    rent_with_sale = rent.merge(sale_gu_median, on="gu", how="left")
-    risk_series = (
-        pd.to_numeric(rent_with_sale[rent_deposit_col], errors="coerce")
-        / pd.to_numeric(rent_with_sale["sale_median_krw"], errors="coerce").replace(0, pd.NA)
+    # 자치구별 매매가 중위값
+    sale_gu_median = sale_curr.groupby("gu", as_index=False)["dealAmount_krw"].median().rename(columns={"dealAmount_krw": "sale_median_krw"})
+    
+    # 1. EDA용 전체 Population 리스크 계산 (2025년 기준)
+    rent_with_sale_all = rent_price_all.merge(sale_gu_median, on="gu", how="left")
+    risk_series_all = (
+        pd.to_numeric(rent_with_sale_all[rent_deposit_col], errors="coerce")
+        / pd.to_numeric(rent_with_sale_all["sale_median_krw"], errors="coerce").replace(0, pd.NA)
         * 100
     )
 
+    # 통근/인프라/치안
     primary_commute = commute_timeseries.loc[commute_timeseries["hub_name"].eq(ui["workplace_name"])].copy()
     if ui.get("secondary_workplace_name"):
-        secondary_commute = commute_timeseries.loc[
-            commute_timeseries["hub_name"].eq(ui["secondary_workplace_name"])
-        ].copy()
+        secondary_commute = commute_timeseries.loc[commute_timeseries["hub_name"].eq(ui["secondary_workplace_name"])].copy()
         commute_source = primary_commute.merge(
             secondary_commute[["gu", "time_order", "avg_minutes"]].rename(columns={"avg_minutes": "secondary_avg_minutes"}),
-            on=["gu", "time_order"],
-            how="inner",
+            on=["gu", "time_order"], how="inner",
         )
         commute_series = commute_source["avg_minutes"] * 0.55 + commute_source["secondary_avg_minutes"] * 0.45
     else:
         commute_series = pd.to_numeric(primary_commute["avg_minutes"], errors="coerce")
 
     infra_base = bundle["infra"][["gu", "hospital_count", "park_count", "mart_count"]].copy()
-    for column in ["hospital_count", "park_count", "mart_count"]:
-        infra_base[column] = pd.to_numeric(infra_base[column], errors="coerce").fillna(0)
-        col_min = float(infra_base[column].min()) if not infra_base.empty else 0.0
-        col_max = float(infra_base[column].max()) if not infra_base.empty else 0.0
-        if col_max > col_min:
-            infra_base[f"{column}_norm"] = (infra_base[column] - col_min) / (col_max - col_min)
-        else:
-            infra_base[f"{column}_norm"] = 0.0
-    infra_series = (
-        infra_base["hospital_count_norm"] + infra_base["park_count_norm"] + infra_base["mart_count_norm"]
-    )
-    crime_series = (
-        crime.assign(crime_count=pd.to_numeric(crime.get("crime_count"), errors="coerce"))
-        .groupby("gu", dropna=False)["crime_count"]
-        .sum(min_count=1)
-        .reset_index(drop=True)
-    )
+    for col in ["hospital_count", "park_count", "mart_count"]:
+        infra_base[col] = pd.to_numeric(infra_base[col], errors="coerce").fillna(0)
+        c_min, c_max = float(infra_base[col].min()), float(infra_base[col].max())
+        infra_base[f"{col}_norm"] = (infra_base[col] - c_min) / (c_max - c_min) if c_max > c_min else 0.0
+    infra_series = infra_base["hospital_count_norm"] + infra_base["park_count_norm"] + infra_base["mart_count_norm"]
+    
+    crime_series = crime.assign(crime_count=pd.to_numeric(crime.get("crime_count"), errors="coerce")).groupby("gu", dropna=False)["crime_count"].sum(min_count=1).reset_index(drop=True)
 
     def standardize_wolse(row):
-        dep = row[rent_deposit_col]
-        ren = row[rent_monthly_col]
-        # 월세 계약만 대상으로 표준화 (전세는 0)
-        # 보증금 < 월세 * 20 인 경우와 보증금 > 월세 * 20 인 경우 모두 '보증금 = 월세 * 20' 기준으로 환산
-        if ren == 0: return None
-        # 표준화 월세 R_std = (보증금 * 0.005 + 월세) / 1.1
-        return (ren + dep * 0.005) / 1.1
+        dep, ren = row[rent_deposit_col], row[rent_monthly_col]
+        return (ren + dep * 0.005) / 1.1 if ren > 0 else None
 
-    raw_series = {
-        "price": pd.to_numeric(rent_price[rent_deposit_col], errors="coerce"),
-        "monthly_price": rent_price.apply(standardize_wolse, axis=1),
+    # EDA 시리즈 (전체 모수)
+    raw_series_all = {
+        "price": pd.to_numeric(rent_price_all[rent_deposit_col], errors="coerce"),
+        "monthly_price": rent_price_all.apply(standardize_wolse, axis=1),
         "commute": pd.to_numeric(commute_series, errors="coerce"),
         "infra": infra_series,
         "safety": pd.to_numeric(crime_series, errors="coerce"),
-        "risk": pd.to_numeric(risk_series, errors="coerce"),
+        "risk": pd.to_numeric(risk_series_all, errors="coerce"),
     }
+
+    # 2. 추천 점수용 Filtering (희망 계약 방식 기준)
+    desired_type = st.session_state.get("desired_contract_type_eda", "전세")
+    if desired_type == "전세":
+        rent_filtered = rent_price_all[rent_price_all[rent_monthly_col] == 0]
+    else:
+        rent_filtered = rent_price_all[rent_price_all[rent_monthly_col] > 0]
+    
+    if rent_filtered.empty:
+        rent_filtered = rent_price_all.copy()
+
+    # 필터링된 리스크 계산
+    rent_with_sale_filtered = rent_filtered.merge(sale_gu_median, on="gu", how="left")
+    risk_series_filtered = (
+        pd.to_numeric(rent_with_sale_filtered[rent_deposit_col], errors="coerce")
+        / pd.to_numeric(rent_with_sale_filtered["sale_median_krw"], errors="coerce").replace(0, pd.NA)
+        * 100
+    )
+
+    scoring_series = {
+        "price": pd.to_numeric(rent_filtered[rent_deposit_col], errors="coerce"),
+        "monthly_price": rent_filtered.apply(standardize_wolse, axis=1),
+        "commute": pd.to_numeric(commute_series, errors="coerce"),
+        "infra": infra_series,
+        "safety": pd.to_numeric(crime_series, errors="coerce"),
+        "risk": pd.to_numeric(risk_series_filtered, errors="coerce"),
+    }
+
     thresholds = {}
-    for metric_name, series in raw_series.items():
+    for metric_name, series in scoring_series.items():
         clean = pd.to_numeric(series, errors="coerce").dropna()
         mean = float(clean.mean()) if not clean.empty else 0.0
         std = float(clean.std(ddof=0)) if not clean.empty else 0.0
         thresholds[metric_name] = {
-            "mean": mean,
-            "std": std,
+            "mean": mean, "std": std,
             "lower_1_5_std": mean - 1.5 * std,
             "lower_0_5_std": mean - 0.5 * std,
             "upper_0_5_std": mean + 0.5 * std,
             "upper_1_5_std": mean + 1.5 * std,
         }
-    return raw_series, thresholds
+    return raw_series_all, thresholds
 
 
 def _render_summary_tab(
@@ -1595,115 +1611,7 @@ def _render_persona_tab(persona_row: pd.Series | None, persona_simulation: pd.Da
     st.dataframe(sim_table, width="stretch", height=420)
 
 
-def _build_raw_eda_inputs(bundle: dict[str, object], ui: dict[str, object]) -> tuple[dict[str, pd.Series], dict[str, dict[str, float]]]:
-    rent = bundle["rent"].copy()
-    sale = bundle["sale"].copy()
-    crime = bundle["crime"].copy()
-    commute_timeseries = bundle.get("commute_timeseries", pd.DataFrame()).copy()
-    hospital = bundle["hospital"].copy()
-    mart = bundle["mart"].copy()
-    parks = bundle["parks"].copy()
 
-    rent_year_col = "년월" if "년월" in rent.columns else next((col for col in ["?꾩썡"] if col in rent.columns), None)
-    rent_area_col = "전용면적_m2" if "전용면적_m2" in rent.columns else next((col for col in ["?꾩슜硫댁쟻_m2"] if col in rent.columns), None)
-    rent_deposit_col = "보증금_만원_krw" if "보증금_만원_krw" in rent.columns else next((col for col in ["蹂댁쬆湲?留뚯썝_krw", "보증금_만원"] if col in rent.columns), None)
-    rent_monthly_col = "월세_만원_krw" if "월세_만원_krw" in rent.columns else next((col for col in ["?붿꽭_留뚯썝_krw", "월세_만원"] if col in rent.columns), None)
-
-    if rent_year_col is None or rent_area_col is None or rent_deposit_col is None or rent_monthly_col is None:
-        raise KeyError("Rent source columns are missing required fields for raw EDA.")
-
-    rent["year"] = pd.to_numeric(rent[rent_year_col].astype(str).str[:4], errors="coerce")
-    sale["dealYear"] = pd.to_numeric(sale["dealYear"], errors="coerce")
-    rent = remove_iqr_outliers(rent, [rent_deposit_col, rent_monthly_col, rent_area_col])
-    sale = remove_iqr_outliers(sale, ["dealAmount_krw", "excluUseAr"])
-
-    min_m2 = ui["min_area_pyeong"] * 3.3058
-    max_m2 = ui["max_area_pyeong"] * 3.3058
-    rent_price = rent.loc[
-        pd.to_numeric(rent[rent_area_col], errors="coerce").between(min_m2, max_m2, inclusive="both")
-        & pd.to_numeric(rent["year"], errors="coerce").eq(2025)
-    ].copy()
-    rent = rent.loc[
-        pd.to_numeric(rent[rent_area_col], errors="coerce").between(min_m2, max_m2, inclusive="both")
-        & pd.to_numeric(rent["year"], errors="coerce").eq(ui["selected_year"])
-    ].copy()
-    sale = sale.loc[
-        pd.to_numeric(sale["excluUseAr"], errors="coerce").between(min_m2, max_m2, inclusive="both")
-        & pd.to_numeric(sale["dealYear"], errors="coerce").eq(ui["selected_year"])
-    ].copy()
-
-    sale_gu_median = sale.groupby("gu", as_index=False)["dealAmount_krw"].median().rename(columns={"dealAmount_krw": "sale_median_krw"})
-    rent_with_sale = rent.merge(sale_gu_median, on="gu", how="left")
-    risk_series = (
-        pd.to_numeric(rent_with_sale[rent_deposit_col], errors="coerce")
-        / pd.to_numeric(rent_with_sale["sale_median_krw"], errors="coerce").replace(0, pd.NA)
-        * 100
-    )
-
-    primary_commute = commute_timeseries.loc[commute_timeseries["hub_name"].eq(ui["workplace_name"])].copy()
-    if ui.get("secondary_workplace_name"):
-        secondary_commute = commute_timeseries.loc[
-            commute_timeseries["hub_name"].eq(ui["secondary_workplace_name"])
-        ].copy()
-        commute_source = primary_commute.merge(
-            secondary_commute[["gu", "time_order", "avg_minutes"]].rename(columns={"avg_minutes": "secondary_avg_minutes"}),
-            on=["gu", "time_order"],
-            how="inner",
-        )
-        commute_series = commute_source["avg_minutes"] * 0.55 + commute_source["secondary_avg_minutes"] * 0.45
-    else:
-        commute_series = pd.to_numeric(primary_commute["avg_minutes"], errors="coerce")
-
-    infra_base = bundle["infra"][["gu", "hospital_count", "park_count", "mart_count"]].copy()
-    for column in ["hospital_count", "park_count", "mart_count"]:
-        infra_base[column] = pd.to_numeric(infra_base[column], errors="coerce").fillna(0)
-        col_min = float(infra_base[column].min()) if not infra_base.empty else 0.0
-        col_max = float(infra_base[column].max()) if not infra_base.empty else 0.0
-        if col_max > col_min:
-            infra_base[f"{column}_norm"] = (infra_base[column] - col_min) / (col_max - col_min)
-        else:
-            infra_base[f"{column}_norm"] = 0.0
-    infra_series = (
-        infra_base["hospital_count_norm"] + infra_base["park_count_norm"] + infra_base["mart_count_norm"]
-    )
-    crime_series = (
-        crime.assign(crime_count=pd.to_numeric(crime.get("crime_count"), errors="coerce"))
-        .groupby("gu", dropna=False)["crime_count"]
-        .sum(min_count=1)
-        .reset_index(drop=True)
-    )
-
-    def standardize_wolse(row):
-        dep = row[rent_deposit_col]
-        ren = row[rent_monthly_col]
-        # 월세 계약만 대상으로 표준화 (전세는 0)
-        # 보증금 < 월세 * 20 인 경우와 보증금 > 월세 * 20 인 경우 모두 '보증금 = 월세 * 20' 기준으로 환산
-        if ren == 0: return None
-        # 표준화 월세 R_std = (보증금 * 0.005 + 월세) / 1.1
-        return (ren + dep * 0.005) / 1.1
-
-    raw_series = {
-        "price": pd.to_numeric(rent_price[rent_deposit_col], errors="coerce"),
-        "monthly_price": rent_price.apply(standardize_wolse, axis=1),
-        "commute": pd.to_numeric(commute_series, errors="coerce"),
-        "infra": infra_series,
-        "safety": pd.to_numeric(crime_series, errors="coerce"),
-        "risk": pd.to_numeric(risk_series, errors="coerce"),
-    }
-    thresholds = {}
-    for metric_name, series in raw_series.items():
-        clean = pd.to_numeric(series, errors="coerce").dropna()
-        mean = float(clean.mean()) if not clean.empty else 0.0
-        std = float(clean.std(ddof=0)) if not clean.empty else 0.0
-        thresholds[metric_name] = {
-            "mean": mean,
-            "std": std,
-            "lower_1_5_std": mean - 1.5 * std,
-            "lower_0_5_std": mean - 0.5 * std,
-            "upper_0_5_std": mean + 0.5 * std,
-            "upper_1_5_std": mean + 1.5 * std,
-        }
-    return raw_series, thresholds
 
 
 def main() -> None:
