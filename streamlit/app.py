@@ -1204,8 +1204,21 @@ def _render_eda_tab(
     scoring_meta: dict[str, object],
     persona_row: pd.Series | None,
     income_reference: dict[str, object] | None,
+    bundle: dict[str, object],
 ) -> None:
-    st.markdown('<div class="section-title">EDA 및 기준 선정</div>', unsafe_allow_html=True)
+
+    with st.container(border=True):
+        st.markdown("#### 사용자 정보 입력")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.number_input("현금자산(원)", min_value=0, step=10_000_000, key="cash_assets_krw_eda")
+            st.number_input("본인 소득(월/원)", min_value=0, step=1_000_000, key="user_income_eda")
+        with c2:
+            st.number_input("배우자 소득(월/원)", min_value=0, step=1_000_000, key="spouse_income_eda")
+            st.selectbox("희망 계약 방식", ["전세", "월세"], key="desired_contract_type_eda")
+        with c3:
+            st.number_input("저축 비율(%)", min_value=0, max_value=100, step=5, key="saving_ratio_pct_eda")
+            st.date_input("예상 입주 시기", key="move_in_date_eda")
 
     if persona_row is not None:
         st.markdown("#### 페르소나 분류 기준")
@@ -1218,6 +1231,67 @@ def _render_eda_tab(
                 - 부채 구간: 해당 소득구간 내부 금융권 대출 잔액 분포의 `P25 / P50 / P75`
                 """
             )
+
+        if income_reference is not None:
+            st.markdown("##### 소득 및 부채 분포 (Boxplot)")
+            col_box1, col_box2 = st.columns(2)
+            
+            with col_box1:
+                # 소득 박스플롯
+                p25 = income_reference['p25_annual_krw']
+                p50 = income_reference['p50_annual_krw']
+                p75 = income_reference['p75_annual_krw']
+                # 임의의 Min/Max 설정 (시각화용)
+                q_min = p25 * 0.5
+                q_max = p75 * 1.5
+                
+                fig_inc = go.Figure()
+                fig_inc.add_trace(go.Box(
+                    y=[q_min, p25, p50, p75, q_max],
+                    name="연소득",
+                    boxpoints=False,
+                    fillcolor='rgba(142, 197, 252, 0.5)',
+                    line_color='#8ec5fc',
+                    q1=[p25], median=[p50], q3=[p75],
+                    lowerfence=[q_min], upperfence=[q_max]
+                ))
+                fig_inc.update_layout(title="신혼부부 연소득 분포 (전국)", height=350, margin=dict(t=40, b=40, l=40, r=40))
+                st.plotly_chart(fig_inc, use_container_width=True)
+                
+                # 기술통계
+                st.write("**소득 기술통계 (연)**")
+                st.write(f"- P25: {format_korean_money(p25)}")
+                st.write(f"- P50 (중앙값): {format_korean_money(p50)}")
+                st.write(f"- P75: {format_korean_money(p75)}")
+
+            with col_box2:
+                # 부채 박스플롯
+                if persona_row is not None:
+                    dp25 = persona_row.get('debt_p25_krw', 0)
+                    dp50 = persona_row.get('debt_p50_krw', 0)
+                    dp75 = persona_row.get('debt_p75_krw', 0)
+                    dq_min = dp25 * 0.2
+                    dq_max = dp75 * 1.8
+                    
+                    fig_debt = go.Figure()
+                    fig_debt.add_trace(go.Box(
+                        y=[dq_min, dp25, dp50, dp75, dq_max],
+                        name="부채잔액",
+                        boxpoints=False,
+                        fillcolor='rgba(255, 179, 193, 0.5)',
+                        line_color='#ffb3c1',
+                        q1=[dp25], median=[dp50], q3=[dp75],
+                        lowerfence=[dq_min], upperfence=[dq_max]
+                    ))
+                    fig_debt.update_layout(title="소득구간 내 부채 분포", height=350, margin=dict(t=40, b=40, l=40, r=40))
+                    st.plotly_chart(fig_debt, use_container_width=True)
+                    
+                    # 기술통계
+                    st.write("**부채 기술통계**")
+                    st.write(f"- P25: {format_korean_money(dp25)}")
+                    st.write(f"- P50 (중앙값): {format_korean_money(dp50)}")
+                    st.write(f"- P75: {format_korean_money(dp75)}")
+
 
     st.markdown("#### 점수 산정 기준")
     st.markdown(
@@ -1234,15 +1308,38 @@ def _render_eda_tab(
         styled_thresholds[column] = styled_thresholds[column].map(lambda x: f"{x:,.2f}" if pd.notna(x) else "-")
     st.dataframe(styled_thresholds, width="stretch", height=240)
 
+    # 지역구별 전세/월세 계약 건수 막대그래프
+    st.markdown("#### 지역구별 전세/월세 계약 현황")
+    rent_df = bundle.get("rent")
+    if rent_df is not None:
+        rent_temp = rent_df.copy()
+        # 전세/월세 구분 (월세_만원_krw가 0이면 전세)
+        rent_temp["계약유형"] = rent_temp["월세_만원_krw"].apply(lambda x: "전세" if x == 0 else "월세")
+        contract_counts = rent_temp.groupby(["gu", "계약유형"]).size().reset_index(name="건수")
+        
+        fig_contracts = px.bar(
+            contract_counts, 
+            x="gu", 
+            y="건수", 
+            color="계약유형", 
+            barmode="group",
+            title="지역구별 전세 vs 월세 계약 건수",
+            labels={"gu": "자치구", "건수": "계약 건수", "계약유형": "유형"},
+            color_discrete_map={"전세": "#8ec5fc", "월세": "#ffb3c1"}
+        )
+        st.plotly_chart(fig_contracts, width="stretch")
+
+
     metric_defs = [
         ("가격(전세)", "price"),
+        ("가격(월세)", "monthly_price"),
         ("통근", "commute"),
         ("인프라", "infra"),
         ("치안(범죄건수)", "safety"),
         ("전세가율", "risk"),
     ]
     chart_cols = st.columns(2)
-    metric_keys = ["price", "commute", "infra", "safety", "risk"]
+    metric_keys = ["price", "monthly_price", "commute", "infra", "safety", "risk"]
     for idx, (label, metric_key) in enumerate(metric_defs):
         series = pd.to_numeric(raw_eda_series.get(metric_key), errors="coerce").dropna()
         if series.empty:
@@ -1499,6 +1596,7 @@ def _build_raw_eda_inputs(bundle: dict[str, object], ui: dict[str, object]) -> t
 
     raw_series = {
         "price": pd.to_numeric(rent_price[rent_deposit_col], errors="coerce"),
+        "monthly_price": pd.to_numeric(rent_price[rent_monthly_col], errors="coerce"),
         "commute": pd.to_numeric(commute_series, errors="coerce"),
         "infra": infra_series,
         "safety": pd.to_numeric(crime_series, errors="coerce"),
@@ -1575,6 +1673,7 @@ def main() -> None:
             outputs["scoring_meta"],
             persona_row,
             income_reference,
+            bundle,
         )
 
     with tabs[2]:
