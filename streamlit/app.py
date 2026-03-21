@@ -1394,18 +1394,33 @@ def _render_eda_tab(
         if not wolse_df.empty:
             # 모든 월세 계약을 '보증금 = 월세 * 20' 기준으로 표준화
             wolse_df["표준화_월세_만원"] = (wolse_df[rent_monthly_col] + wolse_df[rent_deposit_col] * 0.005) / 1.1
+            # 표준화된 보증금 (월세의 20배)
+            wolse_df["표준화_보증금_만원"] = wolse_df["표준화_월세_만원"] * 20
             
             fig_wolse_std = px.scatter(
                 wolse_df,
-                x="보증금_만원_krw",
+                x="표준화_보증금_만원",
                 y="표준화_월세_만원",
                 color="gu",
-                title="표준화 월세 vs 보증금 (월세 계약 대상)",
-                labels={"보증금_만원_krw": "보증금(만원)", "표준화_월세_만원": "표준화 월세(만원)", "gu": "자치구"},
-                hover_data=["년월", "월세_만원_krw"]
+                title="표준화 월세 vs 표준화 보증금 (보증금 20배 고정)",
+                labels={"표준화_보증금_만원": "표준화 보증금(만원)", "표준화_월세_만원": "표준화 월세(만원)", "gu": "자치구"},
+                hover_data=["년월", "보증금_만원_krw", "월세_만원_krw"]
             )
             st.plotly_chart(fig_wolse_std, width="stretch")
-            st.markdown("**모든 월세 계약을 '보증금 = 월세 * 20' 기준으로 표준화하여 가격을 비교합니다.** (환산율 6% 적용)")
+            
+            st.markdown("#### 면적당 표준화 월세 분석")
+            fig_wolse_area = px.scatter(
+                wolse_df,
+                x="전용면적_m2",
+                y="표준화_월세_만원",
+                color="gu",
+                title="전용면적 대비 표준화 월세 (보증금 20배 기준)",
+                labels={"전용면적_m2": "전용면적(m2)", "표준화_월세_만원": "표준화 월세(만원)", "gu": "자치구"},
+                hover_data=["년월"]
+            )
+            st.plotly_chart(fig_wolse_area, width="stretch")
+            
+            st.markdown("**모든 월세 계약을 '보증금 = 월세 * 20' 기준으로 표준화(월세 조정)하여 가격을 비교합니다.** (환산율 6% 적용)")
 
 
     metric_defs = [
