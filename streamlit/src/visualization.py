@@ -482,3 +482,41 @@ def build_top_rank_chart(recommendations: pd.DataFrame) -> go.Figure:
     fig.update_xaxes(title="종합점수")
     fig.update_yaxes(title="자치구")
     return _apply_common_layout(fig)
+
+
+def build_district_score_chart(row: pd.Series) -> go.Figure:
+    """선택된 자치구의 5대 지표 점수를 시각화하는 가로 막대 그래프 생성"""
+    metrics = {
+        "가격 점수": row.get("price_score", 0),
+        "통근 점수": row.get("commute_score", 0),
+        "인프라 점수": row.get("infra_score", 0),
+        "치안 점수": row.get("safety_score", 0),
+        "전세가율 점수": row.get("risk_score", 0)
+    }
+    
+    df = pd.DataFrame({
+        "지표": list(metrics.keys()),
+        "점수": list(metrics.values())
+    })
+    
+    fig = px.bar(
+        df,
+        x="점수",
+        y="지표",
+        orientation="h",
+        text="점수",
+        title=f"'{row['gu']}' 상세 지표 분석",
+        color="점수",
+        color_continuous_scale="RdYlGn", 
+        range_x=[0, 115]
+    )
+    
+    fig.update_traces(texttemplate='%{text:.1f}점', textposition='outside')
+    fig.update_layout(
+        coloraxis_showscale=False,
+        height=400,
+        margin=dict(l=20, r=20, t=60, b=20),
+        yaxis={'categoryorder':'total ascending'}
+    )
+    
+    return _apply_common_layout(fig)

@@ -778,6 +778,26 @@ def _render_compare_tab(recommendations: pd.DataFrame) -> None:
     if recommendations.empty:
         st.warning("현재 조건에 맞는 비교 대상이 없습니다.")
         return
+
+    # --- 자치구별 상세 점수 분석 시각화 추가 ---
+    st.markdown("### 자치구별 상세 지표 분석")
+    st.info("비교하고 싶은 특정 자치구를 선택하면 5대 점수 지표를 시각화하여 확인하실 수 있습니다.")
+    
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        target_gu = st.selectbox("분석 할 자치구 선택", recommendations['gu'].unique(), index=0)
+        target_row = recommendations[recommendations['gu'] == target_gu].iloc[0]
+        st.metric(label=f"{target_gu} 종합 점수", value=f"{target_row['total_score']:.1f}점")
+        st.write(f"**등급**: {target_row['total_grade']}등급")
+        st.write(f"**별점**: {target_row['total_star_label']}")
+    
+    with col2:
+        from src.visualization import build_district_score_chart
+        fig = build_district_score_chart(target_row)
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+    st.markdown("### 자치구별 지표 비교 일람 (TOP 15)")
     compare_cols = [
         "gu",
         "total_score",
