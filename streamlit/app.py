@@ -751,7 +751,7 @@ def _build_raw_eda_inputs(bundle: dict[str, object], ui: dict[str, object]) -> t
         ren = row[rent_monthly_col]
         # 월세 계약만 대상으로 표준화 (전세는 0)
         # 보증금 < 월세 * 20 인 경우와 보증금 > 월세 * 20 인 경우 모두 '보증금 = 월세 * 20' 기준으로 환산
-        if ren == 0: return 0
+        if ren == 0: return None
         # 표준화 월세 R_std = (보증금 * 0.005 + 월세) / 1.1
         return (ren + dep * 0.005) / 1.1
 
@@ -1408,24 +1408,12 @@ def _render_eda_tab(
             )
             st.plotly_chart(fig_wolse_std, width="stretch")
             
-            st.markdown("#### 면적당 표준화 월세 분석")
-            fig_wolse_area = px.scatter(
-                wolse_df,
-                x="전용면적_m2",
-                y="표준화_월세_만원",
-                color="gu",
-                title="전용면적 대비 표준화 월세 (보증금 20배 기준)",
-                labels={"전용면적_m2": "전용면적(m2)", "표준화_월세_만원": "표준화 월세(만원)", "gu": "자치구"},
-                hover_data=["년월"]
-            )
-            st.plotly_chart(fig_wolse_area, width="stretch")
-            
             st.markdown("**모든 월세 계약을 '보증금 = 월세 * 20' 기준으로 표준화(월세 조정)하여 가격을 비교합니다.** (환산율 6% 적용)")
 
 
     metric_defs = [
         ("가격(전세)", "price"),
-        ("가격(월세)", "monthly_price"),
+        ("표준화 월세", "monthly_price"),
         ("통근", "commute"),
         ("인프라", "infra"),
         ("치안(범죄건수)", "safety"),
@@ -1690,7 +1678,7 @@ def _build_raw_eda_inputs(bundle: dict[str, object], ui: dict[str, object]) -> t
         ren = row[rent_monthly_col]
         # 월세 계약만 대상으로 표준화 (전세는 0)
         # 보증금 < 월세 * 20 인 경우와 보증금 > 월세 * 20 인 경우 모두 '보증금 = 월세 * 20' 기준으로 환산
-        if ren == 0: return 0
+        if ren == 0: return None
         # 표준화 월세 R_std = (보증금 * 0.005 + 월세) / 1.1
         return (ren + dep * 0.005) / 1.1
 
