@@ -677,7 +677,8 @@ def _compute_outputs(bundle: dict[str, object], ui: dict[str, object]) -> dict[s
     burden_range = st.session_state.get("financial_burden_rate_eda", (10.0, 40.0))
     
     if desired_type == "전세":
-        limit_a = (cash + (income_val * saving_ratio * months)) * 5
+        loan_ratio = st.session_state.get("jeonse_loan_ratio_eda", 80.0) / 100
+        limit_a = (cash + (income_val * saving_ratio * months)) / max(0.01, 1 - loan_ratio)
         # C-2: 최악의 경우(6% 이자율) 기준 부담률
         recommendations["burden_rate"] = ((recommendations["deposit_price_krw"] * 0.06) / 12) / income_val * 100
     else:
@@ -847,14 +848,16 @@ def _render_summary_tab(
     desired_type = st.session_state.get("desired_contract_type_eda", "전세")
 
     if desired_type == "전세":
-        limit_a = (cash + (income_val * saving_ratio * months)) * 5
+        loan_ratio_pct = st.session_state.get("jeonse_loan_ratio_eda", 80.0)
+        loan_ratio = loan_ratio_pct / 100
+        limit_a = (cash + (income_val * saving_ratio * months)) / max(0.01, 1 - loan_ratio)
         b1 = (limit_a * 0.04) / 12
         b2 = (limit_a * 0.06) / 12
         c1 = (b1 / income_val) * 100
         c2 = (b2 / income_val) * 100
         summary_text = (
             f"현재 현금자산 {format_korean_money(cash)}, 합산소득 월 {format_korean_money(income_val)}, "
-            f"저축비율 {int(saving_ratio*100)}%, 전세자금대출 80%를 고려했을 때, "
+            f"저축비율 {int(saving_ratio*100)}%, 전세자금대출 {int(loan_ratio_pct)}%를 고려했을 때, "
             f"**가능한 전세 구간은 {format_korean_money(limit_a)} 이하** 입니다. "
             f"이 경우 예상 월 발생 금융 비용은 4~6% 가정할 경우 {format_korean_money(b1)} ~ {format_korean_money(b2)}이고 "
             f"합산소득 대비 {c1:.1f}% ~ {c2:.1f}% 입니다."
@@ -1333,6 +1336,8 @@ def _render_eda_tab(
             st.selectbox("희망 계약 방식", ["전세", "월세"], key="desired_contract_type_eda")
             st.number_input("저축 비율(%)", min_value=0, max_value=100, step=5, key="saving_ratio_pct_eda")
             st.date_input("예상 입주 시기", key="move_in_date_eda")
+            if st.session_state.get("desired_contract_type_eda") == "전세":
+                st.slider("희망 전세자금대출 비율 (%)", 0.0, 80.0, key="jeonse_loan_ratio_eda", step=5.0)
         with c3:
             st.slider(
                 "금융비용 부담률 (%)",
@@ -1612,6 +1617,7 @@ def main() -> None:
     st.session_state.setdefault("saving_ratio_pct_eda", 50)
     st.session_state.setdefault("move_in_date_eda", datetime.date(2026, 10, 1))
     st.session_state.setdefault("financial_burden_rate_eda", (10.0, 40.0))
+    st.session_state.setdefault("jeonse_loan_ratio_eda", 80.0)
 
     try:
         bundle = load_dataset_bundle()
