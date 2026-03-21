@@ -410,6 +410,11 @@ def load_dataset_bundle() -> dict[str, object]:
         "police": police,
         "redevelopment": redevelopment,
         "yearly_rent": yearly_rent,
+        "hospital_db_tables": tables,
+        "commute_zone_frames": commute_zone_frames,
+        "commute_models": commute_models,
+        "commute_timeseries": commute_timeseries,
+        "commute_weighted_avg": commute_weighted_avg,
         "raw_frames": {
             "apt_deal": sale,
             "apt_rent": rent,
