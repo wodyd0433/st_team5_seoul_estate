@@ -1345,8 +1345,30 @@ def _render_eda_tab(
                 hover_data=["년월"]
             )
             st.plotly_chart(fig_wolse_scatter, width="stretch")
+            st.markdown("**월세 계약의 경우 보증금 비율이 굉장히 상이하기 때문에 표준화가 필요함**")
         else:
             st.info("월세 계약 데이터가 없습니다.")
+
+    # 표준화된 월세 스캐터 플롯
+    st.markdown("#### 표준화된 월세 계약 분석 (보증금 환산 반영)")
+    if rent_df is not None:
+        wolse_df = rent_df[rent_df[rent_monthly_col] > 0].copy()
+        if not wolse_df.empty:
+            # 보증금 > 월세 * 20인 경우 초과분 환산 (6% 연이율 -> 월 0.5%)
+            wolse_df["표준화_월세_만원"] = wolse_df.apply(
+                lambda r: r[rent_monthly_col] + max(0, r[rent_deposit_col] - r[rent_monthly_col] * 20) * 0.005, 
+                axis=1
+            )
+            fig_wolse_std = px.scatter(
+                wolse_df,
+                x="보증금_만원_krw",
+                y="표준화_월세_만원",
+                color="gu",
+                title="표준화 월세: 보증금(상한 20배) vs 환산 월세",
+                labels={"보증금_만원_krw": "보증금(만원)", "표준화_월세_만원": "표준화 월세(만원)", "gu": "자치구"},
+                hover_data=["년월"]
+            )
+            st.plotly_chart(fig_wolse_std, width="stretch")
 
 
     metric_defs = [
@@ -1611,9 +1633,31 @@ def _build_raw_eda_inputs(bundle: dict[str, object], ui: dict[str, object]) -> t
         .reset_index(drop=True)
     )
 
+    # 월세 표준화 (보증금 > 월세 * 20인 경우 초과분 환산)
+    # 월세 표준화 (보증금 > 월세 * 20인 경우 초과분 환산)
+    def standardize_wolse(row):
+        dep = row[rent_deposit_col]
+        ren = row[rent_monthly_col]
+        if ren == 0: return 0
+        target_dep = ren * 20
+        if dep > target_dep:
+            return ren + (dep - target_dep) * 0.005
+        return ren
+
+    rent_price_wolse = rent_price[rent_price[rent_monthly_col] > 0].copy()
+    def standardize_wolse(row):
+        dep = row[rent_deposit_col]
+        ren = row[rent_monthly_col]
+        if ren == 0: return 0
+        target_dep = ren * 20
+        if dep > target_dep:
+            return ren + (dep - target_dep) * 0.005
+        return ren
+
+    rent_price_wolse = rent_price[rent_price[rent_monthly_col] > 0].copy()
     raw_series = {
         "price": pd.to_numeric(rent_price[rent_deposit_col], errors="coerce"),
-        "monthly_price": pd.to_numeric(rent_price[rent_monthly_col], errors="coerce"),
+        "monthly_price": rent_price_wolse.apply(standardize_wolse, axis=1),
         "commute": pd.to_numeric(commute_series, errors="coerce"),
         "infra": infra_series,
         "safety": pd.to_numeric(crime_series, errors="coerce"),
