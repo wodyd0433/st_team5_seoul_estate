@@ -110,39 +110,12 @@ def _sync_weight_preset(selected_mode: str) -> dict[str, int]:
     return applied_weights_pct
 
 
-def _build_income_reference(bundle: dict[str, object]) -> dict[str, object] | None:
-    income_df = bundle.get("income_debt_distribution")
-    if not isinstance(income_df, pd.DataFrame) or income_df.empty:
-        return None
-    try:
-        return build_income_percentile_reference(income_df)
-    except Exception:
-        return None
 
 
 
 
 
 
-def _scale_income_reference(income_reference: dict[str, object] | None, household_type: str) -> dict[str, object] | None:
-    if income_reference is None:
-        return None
-    factor = _persona_scale_factor(household_type)
-    if factor == 1:
-        return income_reference
-
-    scaled = dict(income_reference)
-    for key in [
-        "p25_annual_krw",
-        "p50_annual_krw",
-        "p75_annual_krw",
-        "p25_monthly_krw",
-        "p50_monthly_krw",
-        "p75_monthly_krw",
-    ]:
-        if key in scaled and pd.notna(scaled[key]):
-            scaled[key] = float(scaled[key]) * factor
-    return scaled
 
 
 
@@ -325,8 +298,6 @@ def _collect_sidebar_inputs(bundle: dict[str, object]) -> tuple[pd.Series | None
     selected_year = st.sidebar.selectbox("기준 연도", available_years, index=year_index)
     household_type = st.sidebar.selectbox("가구 유형", HOUSEHOLD_OPTIONS, index=1)
     
-    # 페르소나 관련 로직 제거 (요청에 의함)
-    persona_row = None 
 
     workplace_options = list(WORKPLACE_HUBS.keys())
     primary_workplace_index = workplace_options.index("강남역") if "강남역" in workplace_options else 0
@@ -422,7 +393,7 @@ def _collect_sidebar_inputs(bundle: dict[str, object]) -> tuple[pd.Series | None
         "weights_pct": applied_weights_pct,
         "weight_mode": selected_weight_mode,
     }
-    return persona_row, state
+    return state
 
 
 def _filter_budget_ranges(feature_table: pd.DataFrame, ui: dict[str, object]) -> tuple[pd.DataFrame, str | None]:
@@ -713,10 +684,8 @@ def _render_summary_tab(
     recommendation_summary: pd.DataFrame,
     recommendation_map,
     rank_chart,
-    persona_row: pd.Series | None,
     ui: dict[str, object],
-    income_reference: dict[str, object] | None,
-    filter_notice: str | None,
+    filter_notice: str | None = None,
 ) -> None:
     st.markdown('<div class="section-title">추천 요약</div>', unsafe_allow_html=True)
     
@@ -756,56 +725,6 @@ def _render_summary_tab(
 
     if filter_notice:
         st.caption(f"참고: {filter_notice}")
-    if persona_row is not None:
-        persona_income_band = _resolve_persona_income_band(persona_row, income_reference)
-        st.caption(
-            f"선택 페르소나: {persona_row['persona_name']} | "
-            f"월소득 추정 {format_korean_money(persona_row['monthly_income_estimate_krw'])} | "
-            f"부채 추정 {format_korean_money(persona_row['debt_balance_estimate_krw'])}"
-        )
-        if persona_income_band:
-            debt_segment_label = persona_row.get("debt_segment_label", "-")
-            debt_percentile = persona_row.get("debt_percentile")
-            debt_percentile_text = f"P{int(debt_percentile)}" if pd.notna(debt_percentile) else "-"
-            st.caption(
-                f"소득 구간 판정: {persona_income_band} / "
-                f"금융권 대출 구간 판정: {debt_segment_label} ({debt_percentile_text})"
-            )
-        if False:
-            if income_reference is not None:
-                debt_p25 = persona_row.get("debt_p25_krw")
-                debt_p50 = persona_row.get("debt_p50_krw")
-                debt_p75 = persona_row.get("debt_p75_krw")
-                debt_p25_label = persona_row.get("debt_p25_label", "-")
-                debt_p50_label = persona_row.get("debt_p50_label", "-")
-                debt_p75_label = persona_row.get("debt_p75_label", "-")
-                income_segment_label = persona_row.get("income_segment_label", "-")
-                reference_year = persona_row.get("reference_year", income_reference["latest_year"])
-                st.markdown(
-                    f"""
-                    **소득 구간 기준 (전국, {income_reference['latest_year']}년 연소득 분포):**
-                    - `저소득`: {format_korean_money(income_reference['p25_annual_krw'])}, `P25`, `{income_reference['p25_income_label']}`
-                    - `중간소득`: {format_korean_money(income_reference['p50_annual_krw'])}, `P50`, `{income_reference['p50_income_label']}`
-                    - `고소득`: {format_korean_money(income_reference['p75_annual_krw'])}, `P75`, `{income_reference['p75_income_label']}`
-
-                    **금융권 대출 기준 ({income_segment_label}, {reference_year}년):**
-                    - `저부채`: {format_korean_money(debt_p25)}, `P25`, `{debt_p25_label}`
-                    - `중간부채`: {format_korean_money(debt_p50)}, `P50`, `{debt_p50_label}`
-                    - `고부채`: {format_korean_money(debt_p75)}, `P75`, `{debt_p75_label}`
-
-                    **표시 기준:**
-                    - `소득 저/중/고`: `DT_1NW1036` 전체 소득 분포의 `P25 / P50 / P75` 대표값
-                    - `금융권 대출 저/중/고`: 선택된 소득구간 내부 금융권 대출 분포의 `P25 / P50 / P75` 대표값
-                    - `페르소나 판정`: 소득 percentile 3단계 x 해당 소득구간 내 금융권 대출 percentile 3단계 조합
-                    """
-                )
-            st.markdown(
-                """
-                **데이터 출처:**
-                - `원천 데이터`: 통계청(kosis) `DT_1NW1036`
-                - `항목 상세`: 소득(근로·사업소득) 구간과 금융권 대출잔액 구간별 신혼부부 분포
-                """
-            )
 
 
     st.caption(
@@ -837,15 +756,21 @@ def _render_summary_tab(
                 st.markdown(f"### {row['gu']}")
                 st.markdown(f"## {row['total_score']:.1f}점")
                 st.caption(f"{row['total_grade']}등급 · {row['total_star_label']}")
-                label_persona = persona_row["persona_name"] if persona_row is not None else "기본"
-                st.write(build_short_reco_label(row, label_persona))
+                st.write(build_short_reco_label(row, "기본"))
                 st.text(
                     f"{ui['min_area_m2']}~{ui['max_area_m2']}㎡ / "
                     f"{ui['min_area_pyeong']}~{ui['max_area_pyeong']}평 기준"
                 )
-                st.write(f"전세 보증금 {format_korean_money(row['deposit_price_krw'])}")
-                st.write(f"월세 {format_korean_money(row['monthly_rent_active_krw'])}")
-                st.write(f"전세가율 {row['jeonse_ratio_pct']:.1f}%")
+                
+                # 계약 방식에 따른 동적 지표 표시 (요청사항 반영)
+                if ui.get("desired_contract_type_eda") == "전세":
+                    st.write(f"전세 보증금: {format_korean_money(row['deposit_price_krw'])}")
+                    st.write(f"전세가율: {row['jeonse_ratio_pct']:.1f}%")
+                else:
+                    st.write(f"보증금: {format_korean_money(row['deposit_price_krw'])}")
+                    # 월세(표준화) 표시를 위해 src.feature_engineering 의 계산 로직 사용 
+                    # 또는 기 가공된 standardized_monthly_rent_krw 사용
+                    st.write(f"월세 (표준화): {format_korean_money(row.get('standardized_monthly_rent_krw', row['monthly_rent_active_krw']))}")
                 if ui["household_type"].startswith("2") and pd.notna(row.get("secondary_commute_minutes")):
                     st.write(f"직장1 통근 {row['primary_commute_minutes']:.1f}분")
                     st.write(f"직장2 통근 {row['secondary_commute_minutes']:.1f}분")
@@ -930,51 +855,6 @@ def _render_compare_tab(recommendations: pd.DataFrame) -> None:
     st.dataframe(compare, width="stretch", height=430)
 
 
-def _render_persona_tab(persona_row: pd.Series | None, persona_simulation: pd.DataFrame) -> None:
-    st.markdown('<div class="section-title">페르소나 구매 시뮬레이션</div>', unsafe_allow_html=True)
-    if persona_row is None:
-        st.info("페르소나 프로필 데이터가 없어 시뮬레이션을 표시할 수 없습니다.")
-        return
-    if persona_simulation.empty:
-        st.warning("현재 조건에 맞는 시뮬레이션 대상이 없습니다.")
-        return
-
-    metrics = st.columns(4)
-    metrics[0].metric("월소득 추정", format_korean_money(persona_row["monthly_income_estimate_krw"]))
-    metrics[1].metric("부채 추정 잔액", format_korean_money(persona_row["debt_balance_estimate_krw"]))
-    metrics[2].metric("2년 후 종잣돈", format_korean_money(persona_row["seed_money_2y_krw"]))
-    metrics[3].metric("3년 후 추정 매수여력", format_korean_money(persona_row["buying_power_3y_krw"]))
-    st.caption(persona_row["persona_summary"])
-
-    sim_cols = [
-        "gu",
-        "deposit_price_krw",
-        "monthly_rent_active_krw",
-        "sale_price_krw",
-        "buying_status_2y",
-        "buying_status_3y",
-        "buy_2y_gap_krw",
-        "buy_3y_gap_krw",
-    ]
-    sim_table = persona_simulation[sim_cols].copy().head(15)
-    sim_table["deposit_price_krw"] = sim_table["deposit_price_krw"].map(format_korean_money)
-    sim_table["monthly_rent_active_krw"] = sim_table["monthly_rent_active_krw"].map(format_korean_money)
-    sim_table["sale_price_krw"] = sim_table["sale_price_krw"].map(format_korean_money)
-    sim_table["buy_2y_gap_krw"] = sim_table["buy_2y_gap_krw"].map(format_korean_money)
-    sim_table["buy_3y_gap_krw"] = sim_table["buy_3y_gap_krw"].map(format_korean_money)
-    sim_table = sim_table.rename(
-        columns={
-            "gu": "자치구",
-            "deposit_price_krw": "전세 보증금",
-            "monthly_rent_active_krw": "월세",
-            "sale_price_krw": "추정 매매가",
-            "buying_status_2y": "2년 후 매수 가능성",
-            "buying_status_3y": "3년 후 매수 가능성",
-            "buy_2y_gap_krw": "2년 후 매매가 차이",
-            "buy_3y_gap_krw": "3년 후 매매가 차이",
-        }
-    )
-    st.dataframe(sim_table, width="stretch", height=420)
 
 
 def _render_data_tab(
@@ -1202,8 +1082,6 @@ def _render_eda_tab(
     raw_eda_series: dict[str, pd.Series],
     raw_thresholds: dict[str, dict[str, float]],
     scoring_meta: dict[str, object],
-    persona_row: pd.Series | None,
-    income_reference: dict[str, object] | None,
     bundle: dict[str, object],
     ui: dict[str, object],
 ) -> None:
@@ -1231,77 +1109,6 @@ def _render_eda_tab(
             )
             st.caption(f"설정 범위: {st.session_state.financial_burden_rate_eda[0]}% ~ {st.session_state.financial_burden_rate_eda[1]}%")
 
-    if persona_row is not None:
-        st.markdown("#### 페르소나 분류 기준")
-        if income_reference is not None:
-            st.markdown(
-                f"""
-                - 소득 구간: `P25 / P50 / P75` 기준으로 저소득, 중간소득, 고소득 구분
-                - 현재 선택 페르소나: `{persona_row['persona_name']}`
-                - 소득 기준값: {format_korean_money(income_reference['p25_annual_krw'])} / {format_korean_money(income_reference['p50_annual_krw'])} / {format_korean_money(income_reference['p75_annual_krw'])}
-                - 부채 구간: 해당 소득구간 내부 금융권 대출 잔액 분포의 `P25 / P50 / P75`
-                """
-            )
-
-        if income_reference is not None:
-            st.markdown("##### 소득 및 부채 분포 (Boxplot)")
-            col_box1, col_box2 = st.columns(2)
-            
-            with col_box1:
-                # 소득 박스플롯
-                p25 = income_reference['p25_annual_krw']
-                p50 = income_reference['p50_annual_krw']
-                p75 = income_reference['p75_annual_krw']
-                # 임의의 Min/Max 설정 (시각화용)
-                q_min = p25 * 0.5
-                q_max = p75 * 1.5
-                
-                fig_inc = go.Figure()
-                fig_inc.add_trace(go.Box(
-                    y=[q_min, p25, p50, p75, q_max],
-                    name="연소득",
-                    boxpoints=False,
-                    fillcolor='rgba(142, 197, 252, 0.5)',
-                    line_color='#8ec5fc',
-                    q1=[p25], median=[p50], q3=[p75],
-                    lowerfence=[q_min], upperfence=[q_max]
-                ))
-                fig_inc.update_layout(title="신혼부부 연소득 분포 (전국)", height=350, margin=dict(t=40, b=40, l=40, r=40))
-                st.plotly_chart(fig_inc, use_container_width=True)
-                
-                # 기술통계
-                st.write("**소득 기술통계 (연)**")
-                st.write(f"- P25: {format_korean_money(p25)}")
-                st.write(f"- P50 (중앙값): {format_korean_money(p50)}")
-                st.write(f"- P75: {format_korean_money(p75)}")
-
-            with col_box2:
-                # 부채 박스플롯
-                if persona_row is not None:
-                    dp25 = persona_row.get('debt_p25_krw', 0)
-                    dp50 = persona_row.get('debt_p50_krw', 0)
-                    dp75 = persona_row.get('debt_p75_krw', 0)
-                    dq_min = dp25 * 0.2
-                    dq_max = dp75 * 1.8
-                    
-                    fig_debt = go.Figure()
-                    fig_debt.add_trace(go.Box(
-                        y=[dq_min, dp25, dp50, dp75, dq_max],
-                        name="부채잔액",
-                        boxpoints=False,
-                        fillcolor='rgba(255, 179, 193, 0.5)',
-                        line_color='#ffb3c1',
-                        q1=[dp25], median=[dp50], q3=[dp75],
-                        lowerfence=[dq_min], upperfence=[dq_max]
-                    ))
-                    fig_debt.update_layout(title="소득구간 내 부채 분포", height=350, margin=dict(t=40, b=40, l=40, r=40))
-                    st.plotly_chart(fig_debt, use_container_width=True)
-                    
-                    # 기술통계
-                    st.write("**부채 기술통계**")
-                    st.write(f"- P25: {format_korean_money(dp25)}")
-                    st.write(f"- P50 (중앙값): {format_korean_money(dp50)}")
-                    st.write(f"- P75: {format_korean_money(dp75)}")
 
 
     st.markdown("#### 점수 산정 기준")
@@ -1454,13 +1261,11 @@ def main() -> None:
         st.stop()
 
     _show_intro(bundle)
-    persona_row, ui = _collect_sidebar_inputs(bundle)
+    ui = _collect_sidebar_inputs(bundle)
     outputs = _compute_outputs(bundle, ui)
-    income_reference = _scale_income_reference(_build_income_reference(bundle), ui["household_type"])
-
+    
     recommendations = outputs["recommendations"]
     feature_table = outputs["feature_table"]
-    persona_simulation = recommendations.copy()
 
     gallery = build_visualization_gallery(feature_table, recommendations, bundle, ui["selected_year"])
     recommendation_summary = build_recommendation_summary(
@@ -1494,8 +1299,6 @@ def main() -> None:
             outputs["raw_eda_series"],
             outputs["raw_thresholds"],
             outputs["scoring_meta"],
-            persona_row,
-            income_reference,
             bundle,
             ui,
         )
@@ -1506,9 +1309,7 @@ def main() -> None:
             recommendation_summary,
             recommendation_map,
             rank_chart,
-            persona_row,
             ui,
-            income_reference,
             outputs["filter_notice"],
         )
 
