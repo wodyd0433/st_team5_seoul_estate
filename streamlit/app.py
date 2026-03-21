@@ -677,16 +677,27 @@ def _build_raw_eda_inputs(bundle: dict[str, object], ui: dict[str, object]) -> t
     mart = bundle["mart"].copy()
     parks = bundle["parks"].copy()
 
-    rent["year"] = pd.to_numeric(rent["전월"], errors="coerce")
-    rent["year"] = pd.to_numeric(rent["전월"].astype(str).str[:4], errors="coerce")
+    rent_year_col = "년월" if "년월" in rent.columns else next((col for col in ["?꾩썡"] if col in rent.columns), None)
+    rent_area_col = "전용면적_m2" if "전용면적_m2" in rent.columns else next((col for col in ["?꾩슜硫댁쟻_m2"] if col in rent.columns), None)
+    rent_deposit_col = "보증금_만원_krw" if "보증금_만원_krw" in rent.columns else next((col for col in ["蹂댁쬆湲?留뚯썝_krw", "보증금_만원"] if col in rent.columns), None)
+    rent_monthly_col = "월세_만원_krw" if "월세_만원_krw" in rent.columns else next((col for col in ["?붿꽭_留뚯썝_krw", "월세_만원"] if col in rent.columns), None)
+
+    if rent_year_col is None or rent_area_col is None or rent_deposit_col is None or rent_monthly_col is None:
+        raise KeyError("Rent source columns are missing required fields for raw EDA.")
+
+    rent["year"] = pd.to_numeric(rent[rent_year_col].astype(str).str[:4], errors="coerce")
     sale["dealYear"] = pd.to_numeric(sale["dealYear"], errors="coerce")
-    rent = remove_iqr_outliers(rent, ["보증금_만원_krw", "월세_만원_krw", "전용면적_m2"])
+    rent = remove_iqr_outliers(rent, [rent_deposit_col, rent_monthly_col, rent_area_col])
     sale = remove_iqr_outliers(sale, ["dealAmount_krw", "excluUseAr"])
 
     min_m2 = ui["min_area_pyeong"] * 3.3058
     max_m2 = ui["max_area_pyeong"] * 3.3058
+    rent_price = rent.loc[
+        pd.to_numeric(rent[rent_area_col], errors="coerce").between(min_m2, max_m2, inclusive="both")
+        & pd.to_numeric(rent["year"], errors="coerce").eq(2025)
+    ].copy()
     rent = rent.loc[
-        pd.to_numeric(rent["전용면적_m2"], errors="coerce").between(min_m2, max_m2, inclusive="both")
+        pd.to_numeric(rent[rent_area_col], errors="coerce").between(min_m2, max_m2, inclusive="both")
         & pd.to_numeric(rent["year"], errors="coerce").eq(ui["selected_year"])
     ].copy()
     sale = sale.loc[
@@ -697,7 +708,7 @@ def _build_raw_eda_inputs(bundle: dict[str, object], ui: dict[str, object]) -> t
     sale_gu_median = sale.groupby("gu", as_index=False)["dealAmount_krw"].median().rename(columns={"dealAmount_krw": "sale_median_krw"})
     rent_with_sale = rent.merge(sale_gu_median, on="gu", how="left")
     risk_series = (
-        pd.to_numeric(rent_with_sale["보증금_만원_krw"], errors="coerce")
+        pd.to_numeric(rent_with_sale[rent_deposit_col], errors="coerce")
         / pd.to_numeric(rent_with_sale["sale_median_krw"], errors="coerce").replace(0, pd.NA)
         * 100
     )
@@ -716,17 +727,42 @@ def _build_raw_eda_inputs(bundle: dict[str, object], ui: dict[str, object]) -> t
     else:
         commute_series = pd.to_numeric(primary_commute["avg_minutes"], errors="coerce")
 
-    infra_series = pd.Series(
-        [1.5] * len(hospital) + [2.0] * len(mart) + [1.0] * len(parks),
-        dtype="float64",
-        name="infra_raw_points",
+    infra_base = bundle["infra"][["gu", "hospital_count", "park_count", "mart_count"]].copy()
+    for column in ["hospital_count", "park_count", "mart_count"]:
+        infra_base[column] = pd.to_numeric(infra_base[column], errors="coerce").fillna(0)
+        col_min = float(infra_base[column].min()) if not infra_base.empty else 0.0
+        col_max = float(infra_base[column].max()) if not infra_base.empty else 0.0
+        if col_max > col_min:
+            infra_base[f"{column}_norm"] = (infra_base[column] - col_min) / (col_max - col_min)
+        else:
+            infra_base[f"{column}_norm"] = 0.0
+    infra_series = (
+        infra_base["hospital_count_norm"] + infra_base["park_count_norm"] + infra_base["mart_count_norm"]
+    )
+    crime_series = (
+        crime.assign(crime_count=pd.to_numeric(crime.get("crime_count"), errors="coerce"))
+        .groupby("gu", dropna=False)["crime_count"]
+        .sum(min_count=1)
+        .reset_index(drop=True)
     )
 
+    def standardize_wolse(row):
+        dep = row[rent_deposit_col]
+        ren = row[rent_monthly_col]
+        if ren == 0: return 0
+        # 모든 월세 계약을 '보증금 = 월세 * 20' 기준으로 표준화
+        # 환산 비율: 보증금 * 6% = 월세 * 12 (연 6%, 월 0.5%)
+        # 총 월 비용 = 월세 + 보증금 * 0.005
+        # 표준화 월세 = (월세 + 보증금 * 0.005) / 1.1
+        return (ren + dep * 0.005) / 1.1
+
+    rent_price_wolse = rent_price[rent_price[rent_monthly_col] > 0].copy()
     raw_series = {
-        "price": pd.to_numeric(rent["보증금_만원_krw"], errors="coerce"),
+        "price": pd.to_numeric(rent_price[rent_deposit_col], errors="coerce"),
+        "monthly_price": rent_price_wolse.apply(standardize_wolse, axis=1),
         "commute": pd.to_numeric(commute_series, errors="coerce"),
         "infra": infra_series,
-        "safety": pd.to_numeric(crime.get("crime_count"), errors="coerce"),
+        "safety": pd.to_numeric(crime_series, errors="coerce"),
         "risk": pd.to_numeric(risk_series, errors="coerce"),
     }
     thresholds = {}
@@ -1359,10 +1395,7 @@ def _render_eda_tab(
         wolse_df = rent_df[rent_df[rent_monthly_col] > 0].copy()
         if not wolse_df.empty:
             # 보증금 > 월세 * 20인 경우 초과분 환산 (6% 연이율 -> 월 0.5%)
-            wolse_df["표준화_월세_만원"] = wolse_df.apply(
-                lambda r: r[rent_monthly_col] + max(0, r[rent_deposit_col] - r[rent_monthly_col] * 20) * 0.005, 
-                axis=1
-            )
+            wolse_df["표준화_월세_만원"] = (wolse_df[rent_monthly_col] + wolse_df[rent_deposit_col] * 0.005) / 1.1
             fig_wolse_std = px.scatter(
                 wolse_df,
                 x="보증금_만원_krw",
@@ -1637,26 +1670,15 @@ def _build_raw_eda_inputs(bundle: dict[str, object], ui: dict[str, object]) -> t
         .reset_index(drop=True)
     )
 
-    # 월세 표준화 (보증금 > 월세 * 20인 경우 초과분 환산)
-    # 월세 표준화 (보증금 > 월세 * 20인 경우 초과분 환산)
     def standardize_wolse(row):
         dep = row[rent_deposit_col]
         ren = row[rent_monthly_col]
         if ren == 0: return 0
-        target_dep = ren * 20
-        if dep > target_dep:
-            return ren + (dep - target_dep) * 0.005
-        return ren
-
-    rent_price_wolse = rent_price[rent_price[rent_monthly_col] > 0].copy()
-    def standardize_wolse(row):
-        dep = row[rent_deposit_col]
-        ren = row[rent_monthly_col]
-        if ren == 0: return 0
-        target_dep = ren * 20
-        if dep > target_dep:
-            return ren + (dep - target_dep) * 0.005
-        return ren
+        # 모든 월세 계약을 '보증금 = 월세 * 20' 기준으로 표준화
+        # 환산 비율: 보증금 * 6% = 월세 * 12 (연 6%, 월 0.5%)
+        # 총 월 비용 = 월세 + 보증금 * 0.005
+        # 표준화 월세 = (월세 + 보증금 * 0.005) / 1.1
+        return (ren + dep * 0.005) / 1.1
 
     rent_price_wolse = rent_price[rent_price[rent_monthly_col] > 0].copy()
     raw_series = {
