@@ -15,11 +15,11 @@ def format_korean_money(value: float | int | None) -> str:
     return f"{int(round(float(value))):,}원"
 
 
-def build_short_reco_label(row: pd.Series, persona_name: str) -> str:
+def build_short_reco_label(row: pd.Series, label: str) -> str:
     grade = row.get("total_grade")
     if pd.notna(grade):
-        return f"{persona_name} 기준 {grade}등급 추천"
-    return f"{persona_name} 기준 추천"
+        return f"{label} 기준 {grade}등급 추천"
+    return f"{label} 기준 추천"
 
 
 def _apply_common_layout(fig: go.Figure) -> go.Figure:

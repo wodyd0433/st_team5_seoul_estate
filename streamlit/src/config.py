@@ -60,7 +60,6 @@ COMPACT_DATA_PATHS = {
     "housing": DEPLOY_DATA_DIR / "compact_housing.csv",
     "district_metrics": DEPLOY_DATA_DIR / "compact_district_metrics.csv",
     "commute_models": DEPLOY_DATA_DIR / "commute_models.csv",
-    "persona_profiles": DEPLOY_DATA_DIR / "persona_profiles.csv",
 }
 
 APT_SALE_FILE_GLOB = "apartment_sale_transactions_*.csv"
@@ -74,9 +73,6 @@ DATASET_PATHS = {
     "crime": DATA_DIR / "seoul_crime_report_2024.csv",
     "police": DATA_DIR / "police_satisfaction_by_station_2025.csv",
     "redevelopment": DATA_DIR / "seoul_redevelopment_projects_202512.csv",
-    "income_newlyweds": DATA_DIR / "newlywed_income_by_region.csv",
-    "debt_newlyweds": DATA_DIR / "newlywed_debt_by_region.csv",
-    "income_debt_distribution": DATA_DIR / "newlywed_income_debt_distribution.csv",
     "commute_avg_gwanghwamun": DATA_DIR / "구단위 세종로 평균 소요시간_20260224.csv",
     "commute_avg_gangnam": DATA_DIR / "구단위 역삼동 평균 소요시간_20260224.csv",
     "commute_avg_yeouido": DATA_DIR / "구단위 여의도동 평균 소요시간_20260224.csv",

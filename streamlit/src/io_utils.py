@@ -83,17 +83,14 @@ def _load_compact_bundle() -> dict[str, object]:
     housing = _read_csv_with_fallback(COMPACT_DATA_PATHS["housing"])
     district_metrics = _read_csv_with_fallback(COMPACT_DATA_PATHS["district_metrics"])
     commute_models = _read_csv_with_fallback(COMPACT_DATA_PATHS["commute_models"])
-    persona_profiles = _read_csv_with_fallback(COMPACT_DATA_PATHS["persona_profiles"]) if COMPACT_DATA_PATHS["persona_profiles"].exists() else pd.DataFrame()
     return {
         "compact_feature_base": housing,
         "compact_district_metrics": district_metrics,
         "commute_models": commute_models,
-        "persona_profiles": persona_profiles,
         "raw_frames": {
             "compact_housing": housing,
             "compact_district_metrics": district_metrics,
             "commute_models": commute_models,
-            **({"persona_profiles": persona_profiles} if not persona_profiles.empty else {}),
         },
         "unit_report": pd.DataFrame(),
         "is_compact": True,
@@ -364,9 +361,6 @@ def load_dataset_bundle() -> dict[str, object]:
     crime = _reshape_crime(_read_csv_with_fallback(DATASET_PATHS["crime"]))
     police = _reshape_police(_load_police(DATASET_PATHS["police"]))
     redevelopment = _reshape_redevelopment(_load_redevelopment(DATASET_PATHS["redevelopment"]))
-    income_newlyweds = _read_csv_with_fallback(DATASET_PATHS["income_newlyweds"])
-    debt_newlyweds = _load_debt_newlyweds(DATASET_PATHS["debt_newlyweds"])
-    income_debt_distribution = _read_csv_with_fallback(DATASET_PATHS["income_debt_distribution"])
     commute_zone_frames = _load_commute_zone_frames()
     commute_models = _fit_commute_models(commute_zone_frames)
     commute_timeseries, commute_weighted_avg = _build_commute_average_bundle()
@@ -416,14 +410,6 @@ def load_dataset_bundle() -> dict[str, object]:
         "police": police,
         "redevelopment": redevelopment,
         "yearly_rent": yearly_rent,
-        "hospital_db_tables": tables,
-        "commute_zone_frames": commute_zone_frames,
-        "commute_models": commute_models,
-        "commute_timeseries": commute_timeseries,
-        "commute_weighted_avg": commute_weighted_avg,
-        "income_newlyweds": income_newlyweds,
-        "debt_newlyweds": debt_newlyweds,
-        "income_debt_distribution": income_debt_distribution,
         "raw_frames": {
             "apt_deal": sale,
             "apt_rent": rent,
@@ -435,9 +421,6 @@ def load_dataset_bundle() -> dict[str, object]:
             "crime": crime,
             "police": police,
             "redevelopment": redevelopment,
-            "income_newlyweds": income_newlyweds,
-            "debt_newlyweds": debt_newlyweds,
-            "income_debt_distribution": income_debt_distribution,
             **{f"commute_{k}": v for k, v in commute_zone_frames.items()},
             "commute_timeseries": commute_timeseries,
             "commute_weighted_avg": commute_weighted_avg,
