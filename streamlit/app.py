@@ -749,17 +749,15 @@ def _build_raw_eda_inputs(bundle: dict[str, object], ui: dict[str, object]) -> t
     def standardize_wolse(row):
         dep = row[rent_deposit_col]
         ren = row[rent_monthly_col]
+        # 월세 계약만 대상으로 표준화 (전세는 0)
+        # 보증금 < 월세 * 20 인 경우와 보증금 > 월세 * 20 인 경우 모두 '보증금 = 월세 * 20' 기준으로 환산
         if ren == 0: return 0
-        # 모든 월세 계약을 '보증금 = 월세 * 20' 기준으로 표준화
-        # 환산 비율: 보증금 * 6% = 월세 * 12 (연 6%, 월 0.5%)
-        # 총 월 비용 = 월세 + 보증금 * 0.005
-        # 표준화 월세 = (월세 + 보증금 * 0.005) / 1.1
+        # 표준화 월세 R_std = (보증금 * 0.005 + 월세) / 1.1
         return (ren + dep * 0.005) / 1.1
 
-    rent_price_wolse = rent_price[rent_price[rent_monthly_col] > 0].copy()
     raw_series = {
         "price": pd.to_numeric(rent_price[rent_deposit_col], errors="coerce"),
-        "monthly_price": rent_price_wolse.apply(standardize_wolse, axis=1),
+        "monthly_price": rent_price.apply(standardize_wolse, axis=1),
         "commute": pd.to_numeric(commute_series, errors="coerce"),
         "infra": infra_series,
         "safety": pd.to_numeric(crime_series, errors="coerce"),
@@ -1389,23 +1387,25 @@ def _render_eda_tab(
         else:
             st.info("월세 계약 데이터가 없습니다.")
 
-    # 표준화된 월세 스캐터 플롯
-    st.markdown("#### 표준화된 월세 계약 분석 (보증금 환산 반영)")
+    # 표준화된 월세 스캐터 플롯 (전세/월세 통합)
+    st.markdown("#### 표준화된 월세 분석 (보증금 20배 기준 통합)")
     if rent_df is not None:
         wolse_df = rent_df[rent_df[rent_monthly_col] > 0].copy()
         if not wolse_df.empty:
-            # 보증금 > 월세 * 20인 경우 초과분 환산 (6% 연이율 -> 월 0.5%)
+            # 모든 월세 계약을 '보증금 = 월세 * 20' 기준으로 표준화
             wolse_df["표준화_월세_만원"] = (wolse_df[rent_monthly_col] + wolse_df[rent_deposit_col] * 0.005) / 1.1
+            
             fig_wolse_std = px.scatter(
                 wolse_df,
                 x="보증금_만원_krw",
                 y="표준화_월세_만원",
                 color="gu",
-                title="표준화 월세: 보증금(상한 20배) vs 환산 월세",
+                title="표준화 월세 vs 보증금 (월세 계약 대상)",
                 labels={"보증금_만원_krw": "보증금(만원)", "표준화_월세_만원": "표준화 월세(만원)", "gu": "자치구"},
-                hover_data=["년월"]
+                hover_data=["년월", "월세_만원_krw"]
             )
             st.plotly_chart(fig_wolse_std, width="stretch")
+            st.markdown("**모든 월세 계약을 '보증금 = 월세 * 20' 기준으로 표준화하여 가격을 비교합니다.** (환산율 6% 적용)")
 
 
     metric_defs = [
@@ -1673,17 +1673,15 @@ def _build_raw_eda_inputs(bundle: dict[str, object], ui: dict[str, object]) -> t
     def standardize_wolse(row):
         dep = row[rent_deposit_col]
         ren = row[rent_monthly_col]
+        # 월세 계약만 대상으로 표준화 (전세는 0)
+        # 보증금 < 월세 * 20 인 경우와 보증금 > 월세 * 20 인 경우 모두 '보증금 = 월세 * 20' 기준으로 환산
         if ren == 0: return 0
-        # 모든 월세 계약을 '보증금 = 월세 * 20' 기준으로 표준화
-        # 환산 비율: 보증금 * 6% = 월세 * 12 (연 6%, 월 0.5%)
-        # 총 월 비용 = 월세 + 보증금 * 0.005
-        # 표준화 월세 = (월세 + 보증금 * 0.005) / 1.1
+        # 표준화 월세 R_std = (보증금 * 0.005 + 월세) / 1.1
         return (ren + dep * 0.005) / 1.1
 
-    rent_price_wolse = rent_price[rent_price[rent_monthly_col] > 0].copy()
     raw_series = {
         "price": pd.to_numeric(rent_price[rent_deposit_col], errors="coerce"),
-        "monthly_price": rent_price_wolse.apply(standardize_wolse, axis=1),
+        "monthly_price": rent_price.apply(standardize_wolse, axis=1),
         "commute": pd.to_numeric(commute_series, errors="coerce"),
         "infra": infra_series,
         "safety": pd.to_numeric(crime_series, errors="coerce"),
