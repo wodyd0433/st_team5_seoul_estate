@@ -1313,6 +1313,10 @@ def _render_eda_tab(
     st.markdown("#### 지역구별 전세/월세 계약 현황")
     rent_df = bundle.get("rent")
     if rent_df is not None:
+        # 컬럼명 확인
+        rent_deposit_col = "보증금_만원_krw" if "보증금_만원_krw" in rent_df.columns else next((col for col in ["蹂댁쬆湲?留뚯썝_krw", "보증금_만원"] if col in rent_df.columns), "보증금_만원_krw")
+        rent_monthly_col = "월세_만원_krw" if "월세_만원_krw" in rent_df.columns else next((col for col in ["?붿꽭_留뚯썝_krw", "월세_만원"] if col in rent_df.columns), "월세_만원_krw")
+
         rent_temp = rent_df.copy()
         # 전세/월세 구분 (월세_만원_krw가 0이면 전세)
         rent_temp["계약유형"] = rent_temp["월세_만원_krw"].apply(lambda x: "전세" if x == 0 else "월세")
