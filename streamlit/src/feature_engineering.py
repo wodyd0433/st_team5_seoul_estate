@@ -34,6 +34,11 @@ def _aggregate_rent(rent: pd.DataFrame) -> pd.DataFrame:
     frame["year"] = frame["year"].astype(int)
 
     positive_monthly = frame.loc[frame["월세_만원_krw"].fillna(0) > 0].copy()
+    # 보증금 20배 고정 표준화 월세 계산: (월세 + 보증금 * 0.005) / 1.1
+    positive_monthly["standardized_monthly_rent_krw"] = (
+        positive_monthly["월세_만원_krw"] + positive_monthly["보증금_만원_krw"] * 0.005
+    ) / 1.1
+
     grouped = frame.groupby(["gu", "year"], dropna=False).agg(
         deposit_price_krw=("보증금_만원_krw", "median"),
         monthly_rent_krw=("월세_만원_krw", "median"),
@@ -45,6 +50,7 @@ def _aggregate_rent(rent: pd.DataFrame) -> pd.DataFrame:
         positive_monthly.groupby(["gu", "year"], dropna=False)
         .agg(
             monthly_rent_active_krw=("월세_만원_krw", "median"),
+            standardized_monthly_rent_krw=("standardized_monthly_rent_krw", "median"),
             monthly_rent_positive_ratio=("월세_만원_krw", lambda s: (s.fillna(0) > 0).mean()),
         )
         .reset_index()
@@ -195,6 +201,7 @@ def _build_feature_table_from_compact(
                 "deposit_price_krw": _weighted_average(group["deposit_price_krw"], rent_weight),
                 "monthly_rent_krw": _weighted_average(group["monthly_rent_krw"], rent_weight),
                 "monthly_rent_active_krw": _weighted_average(group["monthly_rent_active_krw"], rent_weight),
+                "standardized_monthly_rent_krw": _weighted_average(group.get("standardized_monthly_rent_krw", pd.Series(dtype="float64")), rent_weight),
                 "monthly_rent_positive_ratio": _weighted_average(group["monthly_rent_positive_ratio"], rent_weight),
                 "rent_area_m2": _weighted_average(group["rent_area_m2"], rent_weight),
                 "rent_build_year": _weighted_average(group["rent_build_year"], rent_weight),

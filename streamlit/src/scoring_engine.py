@@ -173,6 +173,7 @@ def score_recommendations(
     missing_strategy: str = "mean",
     score_formula: str | None = None,
     household_type: str = "2인 맞벌이",
+    desired_contract_type: str = "전세",
 ) -> tuple[pd.DataFrame, dict[str, float]]:
     del scaling_method, score_formula, household_type
 
@@ -186,8 +187,15 @@ def score_recommendations(
         + pd.to_numeric(frame.get("hospital_count"), errors="coerce").fillna(0) * 1.5
         + pd.to_numeric(frame.get("park_count"), errors="coerce").fillna(0)
     )
+
+    # 계약 방식에 따라 가격 지표 선택 (전세 보증금 vs 표준화 월세)
+    price_col = "standardized_monthly_rent_krw" if desired_contract_type == "월세" else "deposit_price_krw"
+    # 만약 해당 컬럼이 없으면 (구버전 데이터 등) 기본 보증금 사용
+    if price_col not in frame.columns:
+        price_col = "deposit_price_krw"
+
     metric_specs = {
-        "price": {"series": frame["deposit_price_krw"], "higher_is_better": False, "source_col": "deposit_price_krw"},
+        "price": {"series": frame[price_col], "higher_is_better": False, "source_col": price_col},
         "commute": {"series": frame["commute_minutes"], "higher_is_better": False, "source_col": "commute_minutes"},
         "infra": {"series": frame["infra_index"], "higher_is_better": True, "source_col": "infra_index"},
         "safety": {"series": frame["crime_total_count"], "higher_is_better": False, "source_col": "crime_total_count"},

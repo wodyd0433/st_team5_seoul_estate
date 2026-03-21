@@ -646,14 +646,21 @@ def _compute_outputs(bundle: dict[str, object], ui: dict[str, object]) -> dict[s
         household_type=ui["household_type"],
         secondary_workplace_name=ui["secondary_workplace_name"],
     )
+    # 추천 점수용 임계값 조정 (월세 선택 시 가격 임계값을 월세 기준으로 교체)
+    desired_type = ui.get("desired_contract_type_eda", "전세")
+    scoring_thresholds = raw_thresholds.copy()
+    if desired_type == "월세":
+        scoring_thresholds["price"] = raw_thresholds.get("monthly_price", {})
+
     recommendations, scoring_meta = score_recommendations(
         feature_table=filtered_feature_table,
         selected_gus=[],
         commute_frame=commute_frame,
         weights=ui["weights"],
-        threshold_overrides=raw_thresholds,
+        threshold_overrides=scoring_thresholds,
         missing_strategy="mean",
         household_type=ui["household_type"],
+        desired_contract_type=desired_type,
     )
 
     return {
@@ -664,6 +671,7 @@ def _compute_outputs(bundle: dict[str, object], ui: dict[str, object]) -> dict[s
         "recommendations": recommendations,
         "scoring_meta": scoring_meta,
         "raw_eda_series": raw_eda_series,
+        "raw_thresholds": raw_thresholds,
         "filter_notice": filter_notice,
     }
 
@@ -753,31 +761,18 @@ def _build_raw_eda_inputs(bundle: dict[str, object], ui: dict[str, object]) -> t
         "risk": pd.to_numeric(risk_series_all, errors="coerce"),
     }
 
-    # 2. 추천 점수용 Filtering (희망 계약 방식 기준)
-    desired_type = st.session_state.get("desired_contract_type_eda", "전세")
-    if desired_type == "전세":
-        rent_filtered = rent_price_all[rent_price_all[rent_monthly_col] == 0]
-    else:
-        rent_filtered = rent_price_all[rent_price_all[rent_monthly_col] > 0]
-    
-    if rent_filtered.empty:
-        rent_filtered = rent_price_all.copy()
+    # 2. 임계값 계산용 데이터셋 분리 (전세 vs 월세)
+    rent_jeonse = rent_price_all[rent_price_all[rent_monthly_col] == 0]
+    rent_wolse = rent_price_all[rent_price_all[rent_monthly_col] > 0]
 
-    # 필터링된 리스크 계산
-    rent_with_sale_filtered = rent_filtered.merge(sale_gu_median, on="gu", how="left")
-    risk_series_filtered = (
-        pd.to_numeric(rent_with_sale_filtered[rent_deposit_col], errors="coerce")
-        / pd.to_numeric(rent_with_sale_filtered["sale_median_krw"], errors="coerce").replace(0, pd.NA)
-        * 100
-    )
-
+    # 임계값 계산용 시리즈 구성
     scoring_series = {
-        "price": pd.to_numeric(rent_filtered[rent_deposit_col], errors="coerce"),
-        "monthly_price": rent_filtered.apply(standardize_wolse, axis=1),
+        "price": pd.to_numeric(rent_jeonse[rent_deposit_col], errors="coerce"),
+        "monthly_price": rent_wolse.apply(standardize_wolse, axis=1),
         "commute": pd.to_numeric(commute_series, errors="coerce"),
         "infra": infra_series,
         "safety": pd.to_numeric(crime_series, errors="coerce"),
-        "risk": pd.to_numeric(risk_series_filtered, errors="coerce"),
+        "risk": pd.to_numeric(risk_series_all, errors="coerce"), # 리스크는 전체 모수 기준
     }
 
     thresholds = {}
@@ -1252,10 +1247,12 @@ def _build_eda_threshold_table(scoring_meta: dict[str, object]) -> pd.DataFrame:
 def _render_eda_tab(
     recommendations: pd.DataFrame,
     raw_eda_series: dict[str, pd.Series],
+    raw_thresholds: dict[str, dict[str, float]],
     scoring_meta: dict[str, object],
     persona_row: pd.Series | None,
     income_reference: dict[str, object] | None,
     bundle: dict[str, object],
+    ui: dict[str, object],
 ) -> None:
 
     with st.container(border=True):
@@ -1435,13 +1432,27 @@ def _render_eda_tab(
         ("치안(범죄건수)", "safety"),
         ("전세가율", "risk"),
     ]
+    descriptions = {
+        "price": f"{ui['selected_year']}년 기준 필터링된 면적의 모든 전세 실거래 데이터를 기반으로 한 보증금 분포입니다.",
+        "monthly_price": f"{ui['selected_year']}년 기준 필터링된 면적의 모든 월세 실거래 데이터를 대상으로, 보증금을 월세로 환산하여 표준화한(보증금=월세*20, 환산율 6%) 가격 분포입니다.",
+        "commute": "직장 소지 지점(및 부 소지 지점)까지의 대중교통 이용 시간(분)에 대한 자치구별 가중 평균 분포입니다. (낮을수록 접근성 우수)",
+        "infra": "자치구별 병원, 공원, 마트 수를 각각 0~1로 표준화하여 합산한 인프라 지수 분포입니다. (높을수록 편의시설 풍부)",
+        "safety": "서울시 자치구별 연간 발생한 총 범죄 건수에 대한 분포입니다. (낮을수록 안전)",
+        "risk": "자치구별 아파트 매매 중위가 대비 전세 보증금의 비율(%)에 대한 분포입니다. (낮을수록 역전세 위험 적음)",
+    }
+
     chart_cols = st.columns(2)
-    metric_keys = ["price", "monthly_price", "commute", "infra", "safety", "risk"]
     for idx, (label, metric_key) in enumerate(metric_defs):
         series = pd.to_numeric(raw_eda_series.get(metric_key), errors="coerce").dropna()
         if series.empty:
             continue
-        metric_meta = scoring_meta.get("thresholds", {}).get(metric_key, {}) if isinstance(scoring_meta, dict) else {}
+        
+        col = chart_cols[idx % 2]
+        # 지표별 설명 추가
+        if metric_key in descriptions:
+            col.caption(descriptions[metric_key])
+            
+        metric_meta = raw_thresholds.get(metric_key, {})
         fig = px.histogram(x=series, nbins=20, title=f"{label} 원본 분포")
         for threshold_key, color in [
             ("lower_1_5_std", "#22c55e"),
@@ -1452,107 +1463,10 @@ def _render_eda_tab(
             threshold_value = metric_meta.get(threshold_key)
             if pd.notna(threshold_value):
                 fig.add_vline(x=float(threshold_value), line_dash="dash", line_color=color)
-        chart_cols[idx % 2].plotly_chart(fig, width="stretch")
+        col.plotly_chart(fig, width="stretch")
 
 
-def main() -> None:
-    try:
-        bundle = load_dataset_bundle()
-    except Exception as exc:
-        _show_data_load_error(exc)
-        st.stop()
 
-    _show_intro(bundle)
-    persona_row, ui = _collect_sidebar_inputs(bundle)
-    outputs = _compute_outputs(bundle, ui)
-    income_reference = _scale_income_reference(_build_income_reference(bundle), ui["household_type"])
-
-    recommendations = outputs["recommendations"]
-    feature_table = outputs["feature_table"]
-    persona_simulation = (
-        build_persona_simulation(
-            recommendations,
-            persona_row,
-            ui["cash_assets_krw"],
-            ui["saving_ratio_pct"],
-        )
-        if persona_row is not None
-        else recommendations.copy()
-    )
-
-    gallery = build_visualization_gallery(feature_table, recommendations, bundle, ui["selected_year"])
-    recommendation_summary = build_recommendation_summary(recommendations, ui["household_type"])
-    recommendation_map = build_recommendation_map(
-        recommendations,
-        ui["workplace_name"],
-        ui["secondary_workplace_name"],
-    )
-    rank_chart = build_top_rank_chart(recommendations)
-    tabs = st.tabs(
-        [
-            "랜딩",
-            "추천 요약",
-            "구별 상세 비교",
-            "인프라·입지 분석",
-            "치안·재개발 분석",
-            "페르소나 구매 시뮬레이션",
-        ]
-    )
-
-    with tabs[0]:
-        _render_landing_tab()
-
-    with tabs[1]:
-        _render_eda_tab(
-            recommendations,
-            outputs["raw_eda_series"],
-            outputs["scoring_meta"],
-            persona_row,
-            income_reference,
-            bundle,
-        )
-
-    with tabs[2]:
-        _render_compare_tab(recommendations)
-        st.plotly_chart(gallery["score_stacked_bar"], width="stretch")
-
-    with tabs[3]:
-        st.markdown('<div class="section-title">인프라·입지 분석</div>', unsafe_allow_html=True)
-        c1, c2 = st.columns(2)
-        with c1:
-            st.plotly_chart(gallery["infra_bar"], width="stretch")
-            st.plotly_chart(gallery["infra_scatter"], width="stretch")
-        with c2:
-            st.plotly_chart(gallery["infra_score_bar"], width="stretch")
-            st.plotly_chart(gallery["recommendation_bubble"], width="stretch")
-        commute_timeseries = _get_commute_timeseries(bundle)
-        if not commute_timeseries.empty:
-            destination_options = commute_timeseries["destination_name"].drop_duplicates().tolist()
-            selected_destination = st.selectbox(
-                "시간대별 평균 소요시간 목적지",
-                destination_options,
-                index=0,
-                key="commute_timeseries_destination",
-            )
-            destination_frame = commute_timeseries.loc[
-                commute_timeseries["destination_name"].eq(selected_destination)
-            ].copy()
-            destination_frame = _select_top_commute_gus(destination_frame, top_n=5)
-            st.caption("평균 통근 시간이 가장 긴 자치구 TOP 5만 표시합니다.")
-            st.plotly_chart(build_commute_timeseries_chart(destination_frame, selected_destination), width="stretch")
-
-    with tabs[4]:
-        st.markdown('<div class="section-title">치안·재개발 분석</div>', unsafe_allow_html=True)
-        c1, c2 = st.columns(2)
-        with c1:
-            st.plotly_chart(gallery["safety_dual_axis"], width="stretch")
-            st.plotly_chart(gallery["crime_vs_police"], width="stretch")
-        with c2:
-            st.plotly_chart(gallery["redevelopment_stage_bar"], width="stretch")
-            st.plotly_chart(gallery["redevelopment_vs_score"], width="stretch")
-
-    with tabs[5]:
-        _render_persona_tab(persona_row, persona_simulation)
 
 def _render_persona_tab(persona_row: pd.Series | None, persona_simulation: pd.DataFrame) -> None:
     st.markdown('<div class="section-title">페르소나 구매 시뮬레이션</div>', unsafe_allow_html=True)
@@ -1666,10 +1580,12 @@ def main() -> None:
         _render_eda_tab(
             recommendations,
             outputs["raw_eda_series"],
+            outputs["raw_thresholds"],
             outputs["scoring_meta"],
             persona_row,
             income_reference,
             bundle,
+            ui,
         )
 
     with tabs[2]:
