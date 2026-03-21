@@ -252,33 +252,44 @@ def build_commute_timeseries_chart(frame: pd.DataFrame, destination_name: str) -
     return _apply_common_layout(fig)
 
 
-def build_recommendation_summary(recommendations: pd.DataFrame, household_type: str) -> pd.DataFrame:
+def build_recommendation_summary(
+    recommendations: pd.DataFrame, 
+    household_type: str,
+    desired_contract_type: str = "전세"
+) -> pd.DataFrame:
+
     top = recommendations.head(5).copy()
-    summary = pd.DataFrame(
-        {
-            "자치구": top["gu"],
-            "종합점수": top["total_score"].round(1),
-            "등급": top["total_grade"],
-            "종합별점": top["total_star_label"],
-            "가격 점수": top["price_score"].round(1),
-            "통근 점수": top["commute_score"].round(1),
-            "인프라 점수": top["infra_score"].round(1),
-            "치안 점수": top["safety_score"].round(1),
-            "전세가율 점수": top["risk_score"].round(1),
-            "면적": (
-                top["selected_area_min_m2"].round(1).astype(str)
-                + "~"
-                + top["selected_area_max_m2"].round(1).astype(str)
-                + "㎡ / "
-                + top["selected_area_min_pyeong"].astype(int).astype(str)
-                + "~"
-                + top["selected_area_max_pyeong"].astype(int).astype(str)
-                + "평"
-            ),
-            "전세 보증금": top["deposit_price_krw"].map(format_korean_money),
-            "월세": top["monthly_rent_active_krw"].map(format_korean_money),
-        }
-    )
+    # 공통 항목 구성
+    data = {
+        "자치구": top["gu"],
+        "종합점수": top["total_score"].round(1),
+        "등급": top["total_grade"],
+        "종합별점": top["total_star_label"],
+        "가격 점수": top["price_score"].round(1),
+        "통근 점수": top["commute_score"].round(1),
+        "인프라 점수": top["infra_score"].round(1),
+        "치안 점수": top["safety_score"].round(1),
+        "전세가율 점수": top["risk_score"].round(1),
+        "면적": (
+            top["selected_area_min_m2"].round(1).astype(str)
+            + "~"
+            + top["selected_area_max_m2"].round(1).astype(str)
+            + "㎡ / "
+            + top["selected_area_min_pyeong"].astype(int).astype(str)
+            + "~"
+            + top["selected_area_max_pyeong"].astype(int).astype(str)
+            + "평"
+        ),
+    }
+
+    if desired_contract_type == "전세":
+        data["전세 보증금"] = top["deposit_price_krw"].map(format_korean_money)
+        data["전세가율 (%)"] = top["jeonse_ratio_pct"].map(lambda x: f"{x:.1f}%" if pd.notna(x) else "-")
+    else:
+        data["보증금"] = top["deposit_price_krw"].map(format_korean_money)
+        data["월세 (표준화)"] = top["standardized_monthly_rent_krw"].map(format_korean_money)
+
+    summary = pd.DataFrame(data)
     if str(household_type).startswith("2"):
         summary["직장1 통근시간"] = top["primary_commute_minutes"].map(lambda x: f"{x:.1f}분" if pd.notna(x) else "-")
         summary["직장2 통근시간"] = top["secondary_commute_minutes"].map(lambda x: f"{x:.1f}분" if pd.notna(x) else "-")

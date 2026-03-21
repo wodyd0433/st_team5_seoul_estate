@@ -12,7 +12,7 @@ from src.cleaning import remove_iqr_outliers
 from src.config import DATA_DIR, DATA_DIR_CANDIDATES, PROJECT_ROOT, WORKPLACE_HUBS
 from src.feature_engineering import build_feature_table
 from src.io_utils import load_dataset_bundle
-from src.persona import build_income_percentile_reference, build_persona_simulation
+from src.persona import build_income_percentile_reference
 from src.scoring_engine import prepare_commute_frame, score_recommendations
 from src.visualization import (
     build_commute_timeseries_chart,
@@ -88,23 +88,6 @@ def _read_markdown(path: Path) -> str:
         return f"문서를 읽지 못했습니다: `{path.name}`\n\n```text\n{exc}\n```"
 
 
-def _apply_persona_defaults(persona_row: pd.Series) -> None:
-    deposit_slider_min = 100_000_000
-    deposit_slider_max = 1_500_000_000
-    monthly_slider_min = 300_000
-    monthly_slider_max = 4_000_000
-
-    deposit_max = min(int(persona_row["deposit_budget_cap_krw"]), deposit_slider_max)
-    monthly_max = min(int(persona_row["monthly_budget_cap_krw"]), monthly_slider_max)
-    deposit_min = max(deposit_slider_min, min(int(deposit_max * 0.6), deposit_max))
-    monthly_min = max(monthly_slider_min, min(int(monthly_max * 0.6), monthly_max))
-
-    st.session_state["budget_cap_range"] = (deposit_min, deposit_max)
-    st.session_state["monthly_budget_range"] = (monthly_min, monthly_max)
-    st.session_state["cash_assets_krw"] = 100_000_000
-    st.session_state["saving_ratio_pct"] = 50.0
-    st.session_state["use_deposit_budget_filter"] = False
-    st.session_state["use_monthly_budget_filter"] = False
 
 
 def _get_applied_weights() -> dict[str, int]:
@@ -137,45 +120,8 @@ def _build_income_reference(bundle: dict[str, object]) -> dict[str, object] | No
         return None
 
 
-def _persona_scale_factor(household_type: str) -> int:
-    return 2 if str(household_type).startswith("2") else 1
 
 
-def _scale_persona_row(persona_row: pd.Series | None, household_type: str) -> pd.Series | None:
-    if persona_row is None:
-        return None
-    factor = _persona_scale_factor(household_type)
-    if factor == 1:
-        return persona_row
-
-    scaled = persona_row.copy()
-    scale_columns = [
-        "monthly_income_estimate_krw",
-        "annual_income_estimate_krw",
-        "debt_balance_estimate_krw",
-        "monthly_debt_service_estimate_krw",
-        "monthly_living_cost_estimate_krw",
-        "monthly_saving_estimate_krw",
-        "current_seed_estimate_krw",
-        "seed_money_2y_krw",
-        "seed_money_3y_krw",
-        "buying_power_2y_krw",
-        "buying_power_3y_krw",
-        "deposit_budget_cap_krw",
-        "monthly_budget_cap_krw",
-        "income_p25_annual_krw",
-        "income_p50_annual_krw",
-        "income_p75_annual_krw",
-        "debt_p25_krw",
-        "debt_p50_krw",
-        "debt_p75_krw",
-    ]
-    for column in scale_columns:
-        if column in scaled.index and pd.notna(scaled[column]):
-            scaled[column] = float(scaled[column]) * factor
-
-    scaled["persona_summary"] = f"{scaled['persona_summary']} ({household_type} 기준 {factor}배 적용)"
-    return scaled
 
 
 def _scale_income_reference(income_reference: dict[str, object] | None, household_type: str) -> dict[str, object] | None:
@@ -199,36 +145,8 @@ def _scale_income_reference(income_reference: dict[str, object] | None, househol
     return scaled
 
 
-def _resolve_persona_income_band(persona_row: pd.Series | None, income_reference: dict[str, object] | None) -> str | None:
-    if persona_row is None:
-        return None
-    segment = persona_row.get("income_segment_label")
-    percentile = persona_row.get("income_percentile")
-    if pd.notna(segment) and pd.notna(percentile):
-        return f"{segment} (P{int(percentile)})"
-    return None
 
 
-def _ensure_persona_state(persona_profiles: pd.DataFrame, household_type: str) -> pd.Series | None:
-    if persona_profiles.empty:
-        return None
-
-    st.session_state.setdefault("persona_name", "중간소득 고부채")
-    persona_options = persona_profiles["persona_name"].tolist()
-    selected_persona = st.sidebar.selectbox("페르소나 선택", persona_options, key="persona_name")
-    persona_row = persona_profiles.loc[persona_profiles["persona_name"].eq(selected_persona)].iloc[0]
-    persona_row = _scale_persona_row(persona_row, household_type)
-    persona_state_key = f"{selected_persona}|{household_type}"
-
-    if st.session_state.get("last_persona_state_key") != persona_state_key:
-        _apply_persona_defaults(persona_row)
-        st.session_state["last_persona_name"] = selected_persona
-        st.session_state["last_persona_state_key"] = persona_state_key
-
-    if st.sidebar.button("페르소나 기본값 다시 적용", use_container_width=True):
-        _apply_persona_defaults(persona_row)
-
-    return persona_row
 
 
 def _resolve_available_years(bundle: dict[str, object]) -> list[int]:
@@ -406,7 +324,10 @@ def _collect_sidebar_inputs(bundle: dict[str, object]) -> tuple[pd.Series | None
     year_index = available_years.index(2025) if 2025 in available_years else 0
     selected_year = st.sidebar.selectbox("기준 연도", available_years, index=year_index)
     household_type = st.sidebar.selectbox("가구 유형", HOUSEHOLD_OPTIONS, index=1)
-    persona_row = _ensure_persona_state(bundle.get("persona_profiles", pd.DataFrame()), household_type)
+    
+    # 페르소나 관련 로직 제거 (요청에 의함)
+    persona_row = None 
+
     workplace_options = list(WORKPLACE_HUBS.keys())
     primary_workplace_index = workplace_options.index("강남역") if "강남역" in workplace_options else 0
     workplace_name = st.sidebar.selectbox("직장 위치 1", workplace_options, index=primary_workplace_index)
@@ -429,54 +350,16 @@ def _collect_sidebar_inputs(bundle: dict[str, object]) -> tuple[pd.Series | None
         step=1,
     )
 
-    use_deposit_budget_filter = st.sidebar.checkbox(
-        "전세보증금 예산 구간 설정",
-        key="use_deposit_budget_filter",
-    )
-    if use_deposit_budget_filter:
-        deposit_budget_min, deposit_budget_max = st.sidebar.slider(
-            "전세보증금 예산 구간",
-            100_000_000,
-            1_500_000_000,
-            key="budget_cap_range",
-            step=50_000_000,
-        )
-        st.sidebar.caption(
-            f"전세 선택 구간: {format_korean_money(deposit_budget_min)} ~ {format_korean_money(deposit_budget_max)}"
-        )
-    else:
-        deposit_budget_min, deposit_budget_max = 100_000_000, 1_500_000_000
+    # 예산 구간 및 개별 자산 입력 제거 (EDA 탭으로 이동됨)
+    deposit_budget_min, deposit_budget_max = 0, 2_000_000_000
+    monthly_budget_min, monthly_budget_max = 0, 5_000_000
+    use_deposit_budget_filter = False
+    use_monthly_budget_filter = False
+    
+    # 자산/소득 정보는 st.session_state (EDA 탭) 에서 가져오므로 사이드바에서는 제거
+    cash_assets_krw = st.session_state.get("cash_assets_krw_eda", 100_000_000)
+    saving_ratio_pct = st.session_state.get("saving_ratio_pct_eda", 50.0)
 
-    use_monthly_budget_filter = st.sidebar.checkbox(
-        "월세 예산 구간 설정",
-        key="use_monthly_budget_filter",
-    )
-    if use_monthly_budget_filter:
-        monthly_budget_min, monthly_budget_max = st.sidebar.slider(
-            "월세 예산 구간",
-            300_000,
-            4_000_000,
-            key="monthly_budget_range",
-            step=100_000,
-        )
-        st.sidebar.caption(
-            f"월세 선택 구간: {format_korean_money(monthly_budget_min)} ~ {format_korean_money(monthly_budget_max)}"
-        )
-    else:
-        monthly_budget_min, monthly_budget_max = 300_000, 4_000_000
-    cash_assets_krw = st.sidebar.number_input(
-        "현금자산",
-        min_value=0,
-        step=10_000_000,
-        key="cash_assets_krw",
-    )
-    saving_ratio_pct = st.sidebar.number_input(
-        "저축비율(소득 대비, %)",
-        min_value=0.0,
-        max_value=100.0,
-        step=1.0,
-        key="saving_ratio_pct",
-    )
     st.sidebar.markdown("#### 가중치 설정")
     selected_weight_mode = st.sidebar.selectbox("모드 선택", WEIGHT_MODE_OPTIONS, key="weight_mode_select")
     applied_weights_pct = _sync_weight_preset(selected_weight_mode)
@@ -1548,61 +1431,6 @@ def _render_eda_tab(
 
 
 
-def _render_persona_tab(persona_row: pd.Series | None, persona_simulation: pd.DataFrame) -> None:
-    st.markdown('<div class="section-title">페르소나 구매 시뮬레이션</div>', unsafe_allow_html=True)
-    if persona_row is None:
-        st.info("페르소나 프로필 데이터가 없어 시뮬레이션을 표시할 수 없습니다.")
-        return
-    if persona_simulation.empty:
-        st.warning("현재 조건에 맞는 시뮬레이션 대상이 없습니다.")
-        return
-
-    summary_row = persona_simulation.iloc[0]
-    annual_income = max(float(persona_row.get("monthly_income_estimate_krw", 0) or 0) * 12, 1)
-    saving_ratio_pct = float(summary_row.get("annual_savings_krw", 0) or 0) / annual_income * 100
-
-    metrics = st.columns(5)
-    metrics[0].metric("월소득 추정", format_korean_money(persona_row["monthly_income_estimate_krw"]))
-    metrics[1].metric("현금자산", format_korean_money(summary_row["cash_assets_krw"]))
-    metrics[2].metric("현재 총 부채", format_korean_money(persona_row["debt_balance_estimate_krw"]))
-    metrics[3].metric("저축비율", f"{saving_ratio_pct:.1f}%")
-    metrics[4].metric("예상 저축액(1년)", format_korean_money(summary_row["annual_savings_krw"]))
-    st.caption(persona_row["persona_summary"])
-    st.caption("가용금액 = 현금자산 + 대출가능금액(LTV 70%) + 예상 저축액(1년), 이자율은 연 4% 가정입니다.")
-
-    sim_cols = [
-        "gu",
-        "sale_price_krw",
-        "cash_assets_krw",
-        "current_total_debt_krw",
-        "available_loan_krw",
-        "annual_savings_krw",
-        "interest_burden_rate_pct",
-        "purchase_gap_krw",
-    ]
-    sim_table = persona_simulation[sim_cols].copy().head(15)
-    sim_table["sale_price_krw"] = sim_table["sale_price_krw"].map(format_korean_money)
-    sim_table["cash_assets_krw"] = sim_table["cash_assets_krw"].map(format_korean_money)
-    sim_table["current_total_debt_krw"] = sim_table["current_total_debt_krw"].map(format_korean_money)
-    sim_table["available_loan_krw"] = sim_table["available_loan_krw"].map(format_korean_money)
-    sim_table["annual_savings_krw"] = sim_table["annual_savings_krw"].map(format_korean_money)
-    sim_table["interest_burden_rate_pct"] = sim_table["interest_burden_rate_pct"].map(
-        lambda x: f"{x:.1f}%" if pd.notna(x) else "-"
-    )
-    sim_table["purchase_gap_krw"] = sim_table["purchase_gap_krw"].map(format_korean_money)
-    sim_table = sim_table.rename(
-        columns={
-            "gu": "자치구",
-            "sale_price_krw": "자치구별 매매가",
-            "cash_assets_krw": "현금자산",
-            "current_total_debt_krw": "현재 총 부채",
-            "available_loan_krw": "대출가능금액(LTV 70%)",
-            "annual_savings_krw": "예상 저축액(1년)",
-            "interest_burden_rate_pct": "예상 총 부채이자부담률",
-            "purchase_gap_krw": "매매가-가용금액",
-        }
-    )
-    st.dataframe(sim_table, width="stretch", height=420)
 
 
 
@@ -1632,19 +1460,14 @@ def main() -> None:
 
     recommendations = outputs["recommendations"]
     feature_table = outputs["feature_table"]
-    persona_simulation = (
-        build_persona_simulation(
-            recommendations,
-            persona_row,
-            ui["cash_assets_krw"],
-            ui["saving_ratio_pct"],
-        )
-        if persona_row is not None
-        else recommendations.copy()
-    )
+    persona_simulation = recommendations.copy()
 
     gallery = build_visualization_gallery(feature_table, recommendations, bundle, ui["selected_year"])
-    recommendation_summary = build_recommendation_summary(recommendations, ui["household_type"])
+    recommendation_summary = build_recommendation_summary(
+        recommendations, 
+        ui["household_type"],
+        desired_contract_type=st.session_state.get("desired_contract_type_eda", "전세")
+    )
     recommendation_map = build_recommendation_map(
         recommendations,
         ui["workplace_name"],
@@ -1659,7 +1482,6 @@ def main() -> None:
             "구별 상세 비교",
             "인프라·입지 분석",
             "치안·재개발 분석",
-            "페르소나 구매 시뮬레이션",
         ]
     )
 
@@ -1729,8 +1551,6 @@ def main() -> None:
             st.plotly_chart(gallery["redevelopment_stage_bar"], width="stretch")
             st.plotly_chart(gallery["redevelopment_vs_score"], width="stretch")
 
-    with tabs[6]:
-        _render_persona_tab(persona_row, persona_simulation)
 
 
 if __name__ == "__main__":
