@@ -1330,6 +1330,24 @@ def _render_eda_tab(
         )
         st.plotly_chart(fig_contracts, width="stretch")
 
+    # 월세 계약 보증금 vs 월세 스캐터 플롯
+    st.markdown("#### 월세 계약 보증금 vs 월세 관계")
+    if rent_df is not None:
+        wolse_df = rent_df[rent_df["월세_만원_krw"] > 0].copy()
+        if not wolse_df.empty:
+            fig_wolse_scatter = px.scatter(
+                wolse_df,
+                x="보증금_만원_krw",
+                y="월세_만원_krw",
+                color="gu",
+                title="월세 계약: 보증금 vs 월세 금액 (만원)",
+                labels={"보증금_만원_krw": "보증금(만원)", "월세_만원_krw": "월세(만원)", "gu": "자치구"},
+                hover_data=["년월"]
+            )
+            st.plotly_chart(fig_wolse_scatter, width="stretch")
+        else:
+            st.info("월세 계약 데이터가 없습니다.")
+
 
     metric_defs = [
         ("가격(전세)", "price"),
