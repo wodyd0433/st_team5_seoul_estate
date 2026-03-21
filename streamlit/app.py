@@ -681,14 +681,10 @@ def _build_raw_eda_inputs(bundle: dict[str, object], ui: dict[str, object]) -> t
 
 def _render_summary_tab(
     recommendations: pd.DataFrame,
-    recommendation_summary: pd.DataFrame,
-    recommendation_map,
-    rank_chart,
     ui: dict[str, object],
-    filter_notice: str | None = None,
-    radar_chart: go.Figure | None = None,
+    gallery: dict[str, go.Figure],
 ) -> None:
-    st.markdown('<div class="section-title">추천 요약</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">추천 요약 (지표별 순위)</div>', unsafe_allow_html=True)
     
     # 사용자 개인화 요약 문구 생성
     today = datetime.date(2026, 3, 21)
@@ -724,56 +720,42 @@ def _render_summary_tab(
     
     st.info(summary_text)
 
-    if filter_notice:
-        st.caption(f"참고: {filter_notice}")
-
-
     if recommendations.empty:
         st.warning("현재 조건에 맞는 추천 결과가 없습니다.")
         return
 
-    top_cards = recommendations.head(5).copy()
-    card_cols = st.columns(5)
-    for idx, (_, row) in enumerate(top_cards.iterrows()):
-        with card_cols[idx]:
-            with st.container(border=True):
-                st.markdown(f"**TOP {idx + 1}**")
-                st.markdown(f"### {row['gu']}")
-                st.markdown(f"## {row['total_score']:.1f}점")
-                st.caption(f"{row['total_grade']}등급 · {row['total_star_label']}")
-                st.write(build_short_reco_label(row, "기본"))
-                st.text(
-                    f"{ui['min_area_m2']}~{ui['max_area_m2']}㎡ / "
-                    f"{ui['min_area_pyeong']}~{ui['max_area_pyeong']}평 기준"
-                )
-                
-                # 계약 방식에 따른 동적 지표 표시 (요청사항 반영)
-                if ui.get("desired_contract_type_eda") == "전세":
-                    st.write(f"전세 보증금: {format_korean_money(row['deposit_price_krw'])}")
-                    st.write(f"전세가율: {row['jeonse_ratio_pct']:.1f}%")
-                else:
-                    st.write(f"보증금: {format_korean_money(row['deposit_price_krw'])}")
-                    # 월세(표준화) 표시를 위해 src.feature_engineering 의 계산 로직 사용 
-                    # 또는 기 가공된 standardized_monthly_rent_krw 사용
-                    st.write(f"월세 (표준화): {format_korean_money(row.get('standardized_monthly_rent_krw', row['monthly_rent_active_krw']))}")
-                if ui["household_type"].startswith("2") and pd.notna(row.get("secondary_commute_minutes")):
-                    st.write(f"직장1 통근 {row['primary_commute_minutes']:.1f}분")
-                    st.write(f"직장2 통근 {row['secondary_commute_minutes']:.1f}분")
-                else:
-                    st.write(f"통근 {row['commute_minutes']:.1f}분")
-                if row.get("risk_warning"):
-                    st.warning(row["risk_warning"])
+    st.markdown("### 지표별 자치구 순위 (종합)")
+    st.info("각 지표별로 모든 자치구의 순위를 확인할 수 있습니다. 보려는 지표를 선택하세요.")
+    
+    metric_map = {
+        "가격 점수": "ranking_price_score",
+        "통근 점수": "ranking_commute_score",
+        "인프라 점수": "ranking_infra_score",
+        "치안 점수": "ranking_safety_score",
+        "전세가율 점수": "ranking_risk_score"
+    }
+    
+    selected_label = st.selectbox("순위 지표 선택", list(metric_map.keys()), index=0)
+    chart_key = metric_map[selected_label]
+    
+    if chart_key in gallery:
+        st.plotly_chart(gallery[chart_key], use_container_width=True)
+    else:
+        st.warning(f"'{selected_label}' 지표에 대한 차트 데이터가 없습니다.")
 
-    left, right = st.columns([1.05, 1])
-    with left:
-        st.pydeck_chart(recommendation_map, width="stretch")
-    with right:
-        st.plotly_chart(rank_chart, width="stretch")
-
-    if radar_chart:
-        st.plotly_chart(radar_chart, use_container_width=True)
-
-    st.dataframe(recommendation_summary, width="stretch", height=320)
+    st.markdown("#### 자치구별 세부 점수 테이블")
+    score_cols = ["gu", "total_score", "price_score", "commute_score", "infra_score", "safety_score", "risk_score"]
+    display_table = recommendations[score_cols].copy().sort_values("total_score", ascending=False)
+    display_table = display_table.rename(columns={
+        "gu": "자치구",
+        "total_score": "종합 점수",
+        "price_score": "가격 점수",
+        "commute_score": "통근 점수",
+        "infra_score": "인프라 점수",
+        "safety_score": "치안 점수",
+        "risk_score": "전세가율 점수"
+    })
+    st.dataframe(display_table, use_container_width=True, height=500)
 
 
 def _render_compare_tab(recommendations: pd.DataFrame) -> None:
@@ -1147,12 +1129,8 @@ def main() -> None:
         with tabs[2]:
             _render_summary_tab(
                 recommendations,
-                recommendation_summary,
-                recommendation_map,
-                rank_chart,
                 ui,
-                outputs["filter_notice"],
-                radar_chart=gallery.get("score_radar"),
+                gallery
             )
 
         with tabs[3]:

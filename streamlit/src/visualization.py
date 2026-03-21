@@ -204,6 +204,30 @@ def build_visualization_gallery(
         )
     )
 
+    # 각 지표별 전체 순위 차트 생성 (사용자 요청: 모든 자치구 순위 확인)
+    for metric_name, label in {
+        "price_score": "가격 점수",
+        "commute_score": "통근 점수",
+        "infra_score": "인프라 점수",
+        "safety_score": "치안 점수",
+        "risk_score": "전세가율 점수"
+    }.items():
+        if metric_name in recommendations.columns:
+            view = recommendations[["gu", metric_name]].copy().sort_values(metric_name, ascending=False)
+            figs[f"ranking_{metric_name}"] = _apply_common_layout(
+                px.bar(
+                    view, 
+                    x=metric_name, 
+                    y="gu", 
+                    orientation="h", 
+                    title=f"{label} 순위 (전체)",
+                    color=metric_name,
+                    color_continuous_scale="Viridis",
+                    labels={metric_name: "점수", "gu": "자치구"}
+                )
+            )
+            figs[f"ranking_{metric_name}"].update_layout(coloraxis_showscale=False, yaxis={'categoryorder':'total ascending'})
+
     figs["recommendation_bubble"] = _apply_common_layout(
         px.scatter(
             recommendations,
@@ -219,35 +243,9 @@ def build_visualization_gallery(
     figs["recommendation_bubble"].update_xaxes(tickformat=",")
     figs["recommendation_bubble"].update_yaxes(tickformat=",")
 
-    figs["score_radar"] = build_score_radar_chart(recommendations)
     return figs
 
 
-def build_score_radar_chart(recommendations: pd.DataFrame) -> go.Figure:
-    categories = ["가격 점수", "통근 점수", "인프라 점수", "치안 점수", "전세가율 점수"]
-    # 상위 3개 자치구 비교
-    top_recos = recommendations.head(3).copy()
-    
-    fig = go.Figure()
-    for _, row in top_recos.iterrows():
-        values = [
-            row["price_score"],
-            row["commute_score"],
-            row["infra_score"],
-            row["safety_score"],
-            row["risk_score"]
-        ]
-        # Close the loop
-        values.append(values[0])
-        fig.add_trace(go.Scatterpolar(
-            r=values,
-            theta=categories + [categories[0]],
-            fill='toself',
-            name=row["gu"],
-            line={"width": 2},
-            marker={"size": 6}
-        ))
-    
     fig.update_layout(
         polar=dict(
             radialaxis=dict(
