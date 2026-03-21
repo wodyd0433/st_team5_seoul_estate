@@ -29,29 +29,38 @@ def _weighted_average(values: pd.Series, weights: pd.Series) -> float:
 
 def _aggregate_rent(rent: pd.DataFrame) -> pd.DataFrame:
     frame = rent.copy()
-    frame["year"] = pd.to_numeric(frame["년월"].astype(str).str[:4], errors="coerce")
+    
+    # 컬럼명 동적 탐색 (인코딩 깨짐 대응)
+    year_col = next((col for col in ["년월", "?꾩썡", "year_month"] if col in frame.columns), "년월")
+    deposit_col = next((col for col in ["보증금_만원_krw", "蹂댁쬆湲?留뚯썝_krw", "보증금_만원", "deposit_price_krw"] if col in frame.columns), "보증금_만원_krw")
+    monthly_col = next((col for col in ["월세_만원_krw", "?붿꽭_留뚯썝_krw", "월세_만원", "monthly_rent_krw", "monthly_rent_active_krw"] if col in frame.columns), "월세_만원_krw")
+    area_col = next((col for col in ["전용면적_m2", "?꾩슜硫댁쟻_m2", "excluUseAr"] if col in frame.columns), "전용면적_m2")
+    build_year_col = next((col for col in ["건축년도", "buildYear"] if col in frame.columns), "건축년도")
+
+    frame["year"] = pd.to_numeric(frame[year_col].astype(str).str[:4], errors="coerce")
     frame = frame.dropna(subset=["gu", "year"]).copy()
     frame["year"] = frame["year"].astype(int)
 
-    positive_monthly = frame.loc[frame["월세_만원_krw"].fillna(0) > 0].copy()
+    positive_monthly = frame.loc[frame[monthly_col].fillna(0) > 0].copy()
     # 보증금 20배 고정 표준화 월세 계산: (월세 + 보증금 * 0.005) / 1.1
     positive_monthly["standardized_monthly_rent_krw"] = (
-        positive_monthly["월세_만원_krw"] + positive_monthly["보증금_만원_krw"] * 0.005
+        pd.to_numeric(positive_monthly[monthly_col], errors="coerce").fillna(0) + 
+        pd.to_numeric(positive_monthly[deposit_col], errors="coerce").fillna(0) * 0.005
     ) / 1.1
 
     grouped = frame.groupby(["gu", "year"], dropna=False).agg(
-        deposit_price_krw=("보증금_만원_krw", "median"),
-        monthly_rent_krw=("월세_만원_krw", "median"),
-        rent_area_m2=("전용면적_m2", "median"),
-        rent_build_year=("건축년도", lambda s: pd.to_numeric(s, errors="coerce").median()),
+        deposit_price_krw=(deposit_col, "median"),
+        monthly_rent_krw=(monthly_col, "median"),
+        rent_area_m2=(area_col, "median"),
+        rent_build_year=(build_year_col, lambda s: pd.to_numeric(s, errors="coerce").median()),
         rent_txn_count=("gu", "size"),
     )
     positive_grouped = (
         positive_monthly.groupby(["gu", "year"], dropna=False)
         .agg(
-            monthly_rent_active_krw=("월세_만원_krw", "median"),
+            monthly_rent_active_krw=(monthly_col, "median"),
             standardized_monthly_rent_krw=("standardized_monthly_rent_krw", "median"),
-            monthly_rent_positive_ratio=("월세_만원_krw", lambda s: (s.fillna(0) > 0).mean()),
+            monthly_rent_positive_ratio=(monthly_col, lambda s: (s.fillna(0) > 0).mean()),
         )
         .reset_index()
     )

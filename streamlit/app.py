@@ -12,7 +12,6 @@ from src.cleaning import remove_iqr_outliers
 from src.config import DATA_DIR, DATA_DIR_CANDIDATES, PROJECT_ROOT, WORKPLACE_HUBS
 from src.feature_engineering import build_feature_table
 from src.io_utils import load_dataset_bundle
-from src.persona import build_income_percentile_reference
 from src.scoring_engine import prepare_commute_frame, score_recommendations
 from src.visualization import (
     build_commute_timeseries_chart,
@@ -254,7 +253,6 @@ def _show_intro(bundle: dict[str, object]) -> None:
             - `치안 점수`: 범죄 발생량과 경찰 만족도를 함께 봅니다.
             - `전세가율 점수`: 전세가율이 높을수록 리스크가 커집니다.
             - `가중치`: 가격, 통근, 인프라, 치안, 전세가율 비율을 직접 입력하고 100% 합계로 확정합니다.
-            - `페르소나`: 예산 한도와 향후 매수 시뮬레이션에만 사용합니다.
             
             **데이터 출처:**
             - `원천 거래`: 국토교통부 실거래가 오픈 API
@@ -392,6 +390,7 @@ def _collect_sidebar_inputs(bundle: dict[str, object]) -> tuple[pd.Series | None
         "weights": {key: value / 100 for key, value in applied_weights_pct.items()},
         "weights_pct": applied_weights_pct,
         "weight_mode": selected_weight_mode,
+        "desired_contract_type_eda": st.session_state.get("desired_contract_type_eda", "전세"),
     }
     return state
 
@@ -1000,14 +999,6 @@ def _render_landing_tab() -> None:
         - KOSIS `DT_1NW1036` 신혼부부 소득 및 금융권 대출 잔액 분포
         """
     )
-    st.markdown(
-        """
-        **페르소나 선정**
-        - 소득: 전체 분포의 `P25 / P50 / P75`
-        - 부채: 해당 소득구간 내부 대출잔액 분포의 `P25 / P50 / P75`
-        - 2인 맞벌이는 1인 기준 소득, 부채, 구매 시뮬레이션 값을 2배 적용
-        """
-    )
 def _render_landing_tab() -> None:
     st.markdown('<div class="section-title">프로젝트 안내</div>', unsafe_allow_html=True)
     st.markdown(
@@ -1042,9 +1033,9 @@ def _render_landing_tab() -> None:
         - 자치구별 목적지 평균 소요시간 원천 CSV
         - KOSIS `DT_1NW1036` 신혼부부 소득 및 금융권 대출 잔액 분포
 
-        **페르소나와 점수**
-        - 소득과 부채는 각각 `P25 / P50 / P75` 기준으로 9개 페르소나로 구분합니다.
+        **점수 산정 기준**
         - 가격, 통근, 인프라, 치안, 전세가율을 0~100점으로 환산합니다.
+        - 사용자가 입력한 예산 및 자산 정보를 기반으로 입지 적합성을 평가합니다.
         - 가중치를 반영한 종합점수로 추천 지역 TOP 5를 제시합니다.
         """
     )
@@ -1136,7 +1127,7 @@ def _render_eda_tab(
 
         rent_temp = rent_df.copy()
         # 전세/월세 구분 (월세_만원_krw가 0이면 전세)
-        rent_temp["계약유형"] = rent_temp["월세_만원_krw"].apply(lambda x: "전세" if x == 0 else "월세")
+        rent_temp["계약유형"] = rent_temp[rent_monthly_col].apply(lambda x: "전세" if x == 0 else "월세")
         contract_counts = rent_temp.groupby(["gu", "계약유형"]).size().reset_index(name="건수")
         
         fig_contracts = px.bar(
@@ -1154,15 +1145,16 @@ def _render_eda_tab(
     # 월세 계약 보증금 vs 월세 스캐터 플롯
     st.markdown("#### 월세 계약 보증금 vs 월세 관계")
     if rent_df is not None:
-        wolse_df = rent_df[rent_df["월세_만원_krw"] > 0].copy()
+        # 월세_만원_krw 대신 탐색된 컬럼 사용
+        wolse_df = rent_df[rent_df[rent_monthly_col] > 0].copy()
         if not wolse_df.empty:
             fig_wolse_scatter = px.scatter(
                 wolse_df,
-                x="보증금_만원_krw",
-                y="월세_만원_krw",
+                x=rent_deposit_col,
+                y=rent_monthly_col,
                 color="gu",
                 title="월세 계약: 보증금 vs 월세 금액 (만원)",
-                labels={"보증금_만원_krw": "보증금(만원)", "월세_만원_krw": "월세(만원)", "gu": "자치구"},
+                labels={rent_deposit_col: "보증금(만원)", rent_monthly_col: "월세(만원)", "gu": "자치구"},
                 hover_data=["년월"]
             )
             st.plotly_chart(fig_wolse_scatter, width="stretch")
@@ -1260,97 +1252,101 @@ def main() -> None:
         _show_data_load_error(exc)
         st.stop()
 
-    _show_intro(bundle)
-    ui = _collect_sidebar_inputs(bundle)
-    outputs = _compute_outputs(bundle, ui)
-    
-    recommendations = outputs["recommendations"]
-    feature_table = outputs["feature_table"]
+    try:
+        _show_intro(bundle)
+        ui = _collect_sidebar_inputs(bundle)
+        outputs = _compute_outputs(bundle, ui)
+        
+        recommendations = outputs["recommendations"]
+        feature_table = outputs["feature_table"]
 
-    gallery = build_visualization_gallery(feature_table, recommendations, bundle, ui["selected_year"])
-    recommendation_summary = build_recommendation_summary(
-        recommendations, 
-        ui["household_type"],
-        desired_contract_type=st.session_state.get("desired_contract_type_eda", "전세")
-    )
-    recommendation_map = build_recommendation_map(
-        recommendations,
-        ui["workplace_name"],
-        ui["secondary_workplace_name"],
-    )
-    rank_chart = build_top_rank_chart(recommendations)
-    tabs = st.tabs(
-        [
-            "프로젝트 개요",
-            "EDA 및 기준 선정",
-            "추천 요약",
-            "구별 상세 비교",
-            "인프라·입지 분석",
-            "치안·재개발 분석",
-        ]
-    )
-
-    with tabs[0]:
-        _render_landing_tab()
-
-    with tabs[1]:
-        _render_eda_tab(
+        gallery = build_visualization_gallery(feature_table, recommendations, bundle, ui["selected_year"])
+        recommendation_summary = build_recommendation_summary(
+            recommendations, 
+            ui["household_type"],
+            desired_contract_type=st.session_state.get("desired_contract_type_eda", "전세")
+        )
+        recommendation_map = build_recommendation_map(
             recommendations,
-            outputs["raw_eda_series"],
-            outputs["raw_thresholds"],
-            outputs["scoring_meta"],
-            bundle,
-            ui,
+            ui["workplace_name"],
+            ui["secondary_workplace_name"],
+        )
+        rank_chart = build_top_rank_chart(recommendations)
+        tabs = st.tabs(
+            [
+                "프로젝트 개요",
+                "EDA 및 기준 선정",
+                "추천 요약",
+                "구별 상세 비교",
+                "인프라·입지 분석",
+                "치안·재개발 분석",
+            ]
         )
 
-    with tabs[2]:
-        _render_summary_tab(
-            recommendations,
-            recommendation_summary,
-            recommendation_map,
-            rank_chart,
-            ui,
-            outputs["filter_notice"],
-        )
+        with tabs[0]:
+            _render_landing_tab()
 
-    with tabs[3]:
-        _render_compare_tab(recommendations)
-        st.plotly_chart(gallery["score_stacked_bar"], width="stretch")
-
-    with tabs[4]:
-        st.markdown('<div class="section-title">인프라·입지 분석</div>', unsafe_allow_html=True)
-        c1, c2 = st.columns(2)
-        with c1:
-            st.plotly_chart(gallery["infra_bar"], width="stretch")
-            st.plotly_chart(gallery["infra_scatter"], width="stretch")
-        with c2:
-            st.plotly_chart(gallery["infra_score_bar"], width="stretch")
-            st.plotly_chart(gallery["recommendation_bubble"], width="stretch")
-        commute_timeseries = _get_commute_timeseries(bundle)
-        if not commute_timeseries.empty:
-            destination_options = commute_timeseries["destination_name"].drop_duplicates().tolist()
-            selected_destination = st.selectbox(
-                "시간대별 평균 소요시간 목적지",
-                destination_options,
-                index=0,
-                key="commute_timeseries_destination",
+        with tabs[1]:
+            _render_eda_tab(
+                recommendations,
+                outputs["raw_eda_series"],
+                outputs["raw_thresholds"],
+                outputs["scoring_meta"],
+                bundle,
+                ui,
             )
-            destination_frame = commute_timeseries.loc[
-                commute_timeseries["destination_name"].eq(selected_destination)
-            ].copy()
-            destination_frame = _select_top_commute_gus(destination_frame, top_n=5)
-            st.caption("평균 통근 시간이 가장 긴 자치구 TOP 5만 표시합니다.")
-            st.plotly_chart(build_commute_timeseries_chart(destination_frame, selected_destination), width="stretch")
 
-    with tabs[5]:
-        st.markdown('<div class="section-title">치안·재개발 분석</div>', unsafe_allow_html=True)
-        c1, c2 = st.columns(2)
-        with c1:
-            st.plotly_chart(gallery["safety_dual_axis"], width="stretch")
-            st.plotly_chart(gallery["crime_vs_police"], width="stretch")
-        with c2:
-            st.plotly_chart(gallery["redevelopment_stage_bar"], width="stretch")
-            st.plotly_chart(gallery["redevelopment_vs_score"], width="stretch")
+        with tabs[2]:
+            _render_summary_tab(
+                recommendations,
+                recommendation_summary,
+                recommendation_map,
+                rank_chart,
+                ui,
+                outputs["filter_notice"],
+            )
+
+        with tabs[3]:
+            _render_compare_tab(recommendations)
+            st.plotly_chart(gallery["score_stacked_bar"], width="stretch")
+
+        with tabs[4]:
+            st.markdown('<div class="section-title">인프라·입지 분석</div>', unsafe_allow_html=True)
+            c1, c2 = st.columns(2)
+            with c1:
+                st.plotly_chart(gallery["infra_bar"], width="stretch")
+                st.plotly_chart(gallery["infra_scatter"], width="stretch")
+            with c2:
+                st.plotly_chart(gallery["infra_score_bar"], width="stretch")
+                st.plotly_chart(gallery["recommendation_bubble"], width="stretch")
+            commute_timeseries = _get_commute_timeseries(bundle)
+            if not commute_timeseries.empty:
+                destination_options = commute_timeseries["destination_name"].drop_duplicates().tolist()
+                selected_destination = st.selectbox(
+                    "시간대별 평균 소요시간 목적지",
+                    destination_options,
+                    index=0,
+                    key="commute_timeseries_destination",
+                )
+                destination_frame = commute_timeseries.loc[
+                    commute_timeseries["destination_name"].eq(selected_destination)
+                ].copy()
+                destination_frame = _select_top_commute_gus(destination_frame, top_n=5)
+                st.caption("평균 통근 시간이 가장 긴 자치구 TOP 5만 표시합니다.")
+                st.plotly_chart(build_commute_timeseries_chart(destination_frame, selected_destination), width="stretch")
+
+        with tabs[5]:
+            st.markdown('<div class="section-title">치안·재개발 분석</div>', unsafe_allow_html=True)
+            c1, c2 = st.columns(2)
+            with c1:
+                st.plotly_chart(gallery["safety_dual_axis"], width="stretch")
+                st.plotly_chart(gallery["crime_vs_police"], width="stretch")
+            with c2:
+                st.plotly_chart(gallery["redevelopment_stage_bar"], width="stretch")
+                st.plotly_chart(gallery["redevelopment_vs_score"], width="stretch")
+    except Exception as e:
+        st.error(f"애플리케이션 실행 중 오류가 발생했습니다: {e}")
+        st.exception(e)
 
 
 

@@ -21,7 +21,6 @@ from src.config import (
     RAW_CACHE_TTL,
 )
 from src.gu_standardizer import add_standard_gu, gu_match_report
-from src.persona import build_persona_profiles
 from src.unit_detection import candidate_price_columns, standardize_price_columns
 
 
@@ -397,7 +396,6 @@ def load_dataset_bundle() -> dict[str, object]:
 
     park_stats = _build_park_stats(parks)
     infra = _build_infra_summary(hospital, park_stats, mart)
-    persona_profiles = build_persona_profiles(income_debt_distribution)
 
     rent, rent_unit_report = standardize_price_columns(rent, ["보증금_만원", "월세_만원"])
     sale, sale_unit_report = standardize_price_columns(sale, ["dealAmount"])
@@ -426,7 +424,6 @@ def load_dataset_bundle() -> dict[str, object]:
         "income_newlyweds": income_newlyweds,
         "debt_newlyweds": debt_newlyweds,
         "income_debt_distribution": income_debt_distribution,
-        "persona_profiles": persona_profiles,
         "raw_frames": {
             "apt_deal": sale,
             "apt_rent": rent,
@@ -441,7 +438,6 @@ def load_dataset_bundle() -> dict[str, object]:
             "income_newlyweds": income_newlyweds,
             "debt_newlyweds": debt_newlyweds,
             "income_debt_distribution": income_debt_distribution,
-            "persona_profiles": persona_profiles,
             **{f"commute_{k}": v for k, v in commute_zone_frames.items()},
             "commute_timeseries": commute_timeseries,
             "commute_weighted_avg": commute_weighted_avg,
