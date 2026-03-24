@@ -15,3 +15,8 @@ streamlit*.log
 .DS_Store
 Thumbs.db
 ml_sale_price_model/
+ 
+ # Data exclusion for LFS/Cloud Deployment
+ datasets/raw/
+ datasets/cleaned/
+ # datasets/deploy/ is kept intentionally for compact data access

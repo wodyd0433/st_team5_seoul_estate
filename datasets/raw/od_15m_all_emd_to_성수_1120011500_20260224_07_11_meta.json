@@ -1,0 +1,26 @@
+{
+  "collected_at": "2026-03-07T15:38:12",
+  "oprat_date": "20260224",
+  "time_filter": {
+    "hour_from": 7,
+    "hour_to": 11
+  },
+  "destination_emd_cd": "1120011500",
+  "origin_emd_count": 1086,
+  "request_stats": {
+    "ok": 353,
+    "not_found": 733,
+    "error": 0,
+    "exception": 0
+  },
+  "row_count": 3758,
+  "sample_errors": [],
+  "output_csv": "C:\\Users\\wodyd\\OneDrive\\PythonWorkspace\\icb7\\korea_estate\\datasets\\raw\\od_15m_all_emd_to_성수_1120011500_20260224_07_11.csv",
+  "output_gu_csv": "C:\\Users\\wodyd\\OneDrive\\PythonWorkspace\\icb7\\korea_estate\\datasets\\raw\\od_15m_seoul_gu_to_성수_1120011500_20260224_07_11.csv",
+  "output_area_codes_csv": "C:\\Users\\wodyd\\OneDrive\\PythonWorkspace\\icb7\\korea_estate\\datasets\\raw\\stcis_areacode_seoul.csv",
+  "scope": "seoul_only",
+  "requested_date": "20260225",
+  "resolved_date": "20260224",
+  "destination_name": "성수",
+  "gu_row_count": 500
+}
