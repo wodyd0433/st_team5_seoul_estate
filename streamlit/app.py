@@ -482,33 +482,37 @@ def _render_scoring_thresholds_guide() -> None:
 
 def _compute_outputs(bundle: dict[str, object], ui: dict[str, object]) -> dict[str, object]:
     raw_eda_series, raw_thresholds = _build_raw_eda_inputs(bundle, ui)
+    # 1. 모든 자치구 포함된 기본 Feature Table 구축 (예산 필터 전)
     feature_table, feature_meta = build_feature_table(
         bundle=bundle,
         year=ui["selected_year"],
         sampling_rate=1.0,
-        budget_cap=ui["budget_cap"],
+        budget_cap=ui.get("budget_cap", 200000), # 기본값 20억
         remove_outliers=True,
-        monthly_budget_cap=ui["monthly_budget_cap"],
+        monthly_budget_cap=ui.get("monthly_budget_cap", 200), # 기본값 200만
         min_area_pyeong=ui["min_area_pyeong"],
         max_area_pyeong=ui["max_area_pyeong"],
     )
-    filtered_feature_table, filter_notice = _filter_budget_ranges(feature_table, ui)
+    
+    # 2. 통근 프레임도 모든 자치구 기준으로 준비
     commute_frame, commute_meta = prepare_commute_frame(
         ui["workplace_name"],
-        filtered_feature_table,
+        feature_table, # filtered_feature_table 대신 feature_table 사용
         bundle["commute_models"],
         bundle.get("commute_weighted_avg"),
         household_type=ui["household_type"],
         secondary_workplace_name=ui["secondary_workplace_name"],
     )
-    # 추천 점수용 임계값 조정 (월세 선택 시 가격 임계값을 월세 기준으로 교체)
+
+    # 추천 점수용 임계값 조정
     desired_type = ui.get("desired_contract_type_eda", "전세")
     scoring_thresholds = raw_thresholds.copy()
     if desired_type == "월세":
         scoring_thresholds["price"] = raw_thresholds.get("monthly_price", {})
 
-    recommendations, scoring_meta = score_recommendations(
-        feature_table=filtered_feature_table,
+    # 3. 전체 자치구(25개)를 대상으로 점수 산정
+    full_recommendations, scoring_meta = score_recommendations(
+        feature_table=feature_table,
         selected_gus=[],
         commute_frame=commute_frame,
         weights=ui["weights"],
@@ -518,11 +522,7 @@ def _compute_outputs(bundle: dict[str, object], ui: dict[str, object]) -> dict[s
         desired_contract_type=desired_type,
     )
 
-    # 1. 예산/부담률 필터 전의 전체 점수 데이터 저장
-    full_recommendations = recommendations.copy()
-
-    # 2. 사용자 정보 기반 추가 필터링 (Limit A & 부담률)
-    # 현재 시점(today)은 메타데이터(2026-03-21) 기준
+    # 4. 사용자 정보 기반 추가 필터링 (Limit A & 부담률)
     today = datetime.date(2026, 3, 21)
     move_in = st.session_state.get("move_in_date_eda", datetime.date(2026, 10, 1))
     months = max(0, (move_in.year - today.year) * 12 + (move_in.month - today.month))
@@ -533,30 +533,32 @@ def _compute_outputs(bundle: dict[str, object], ui: dict[str, object]) -> dict[s
     saving_ratio = st.session_state.get("saving_ratio_pct_eda", 50) / 100
     burden_range = st.session_state.get("financial_burden_rate_eda", (10.0, 40.0))
     
+    recommendations = full_recommendations.copy()
+    
     if desired_type == "전세":
         loan_ratio = st.session_state.get("jeonse_loan_ratio_eda", 80.0) / 100
         limit_a = (cash + (income_val * saving_ratio * months)) / max(0.01, 1 - loan_ratio)
-        # C-2: 최악의 경우(6% 이자율) 기준 부담률
         recommendations["burden_rate"] = ((recommendations["deposit_price_krw"] * 0.06) / 12) / income_val * 100
     else:
         limit_a = (cash + (income_val * saving_ratio * months))
-        # B: 표준화 월세 대비 부담률
         recommendations["burden_rate"] = (recommendations["standardized_monthly_rent_krw"] / income_val) * 100
 
     # 필터 적용: 가격(보증금) A 이하 및 부담률 범위 내
+    # 또한 build_feature_table에서 적용되는 기본 예산 필터(ui[budget_cap])도 recommendations에 반영
     mask = (recommendations["deposit_price_krw"] <= limit_a) & \
+           (recommendations["deposit_price_krw"] <= ui["budget_cap"] * 10000) & \
            (recommendations["burden_rate"] >= burden_range[0]) & \
            (recommendations["burden_rate"] <= burden_range[1])
     
     recommendations = recommendations[mask].copy()
-    # 필터 결과 안내 문구 추가
+    
+    # 필터 결과 안내 문구
+    filter_notice = f"가용 자산 {format_korean_money(limit_a)} 이하 필터 적용됨"
     if recommendations.empty:
         filter_notice = f"입력하신 가용 자산({format_korean_money(limit_a)}) 및 부담률 범위({burden_range[0]}~{burden_range[1]}%) 내에 해당하는 지역이 없어 추천 결과가 비어있습니다."
-    else:
-        filter_notice = (filter_notice + " | " if filter_notice else "") + f"가용 자산 {format_korean_money(limit_a)} 이하 필터 적용됨"
 
     return {
-        "feature_table": filtered_feature_table,
+        "feature_table": feature_table,
         "feature_meta": feature_meta,
         "commute_frame": commute_frame,
         "commute_meta": commute_meta,
