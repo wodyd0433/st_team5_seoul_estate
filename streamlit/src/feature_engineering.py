@@ -146,7 +146,10 @@ def _add_common_derived_fields(
     max_area_pyeong: int,
 ) -> pd.DataFrame:
     feature = feature.copy()
-    feature["year"] = pd.to_numeric(feature.get("year"), errors="coerce").fillna(year).astype(int)
+    if "year" not in feature.columns:
+        feature["year"] = year
+    else:
+        feature["year"] = pd.to_numeric(feature["year"], errors="coerce").fillna(year).astype(int)
     feature["budget_fit"] = feature["deposit_price_krw"].fillna(feature["deposit_price_krw"].median()).le(budget_cap).astype(int)
     feature["monthly_budget_fit"] = (
         feature["monthly_rent_active_krw"].fillna(feature["monthly_rent_active_krw"].median()).fillna(0).le(monthly_budget_cap).astype(int)
