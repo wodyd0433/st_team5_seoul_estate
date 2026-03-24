@@ -571,6 +571,8 @@ def _compute_outputs(bundle: dict[str, object], ui: dict[str, object]) -> dict[s
     }
 
 
+
+
 def _build_raw_eda_inputs(bundle: dict[str, object], ui: dict[str, object]) -> tuple[dict[str, pd.Series], dict[str, dict[str, float]]]:
     if bundle.get("is_compact"):
         # 경량 모드일 경우 원본 트랜잭션 데이터가 없으므로 빈 데이터와 기본 임계값 반환
@@ -956,14 +958,21 @@ def _build_eda_threshold_table(scoring_meta: dict[str, object]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _render_eda_tab(
-    recommendations: pd.DataFrame,
-    raw_eda_series: dict[str, pd.Series],
-    raw_thresholds: dict[str, dict[str, float]],
-    scoring_meta: dict[str, object],
-    bundle: dict[str, object],
-    ui: dict[str, object],
-) -> None:
+def _render_eda_tab(recommendations, raw_eda_series, raw_thresholds, scoring_meta, bundle, ui):
+    st.subheader("📊 EDA 및 지표 산산 기준 분석")
+    
+    if bundle.get("is_compact"):
+        st.info("💡 현재 **경량 배포 모드(Compact Mode)**로 실행 중입니다. 원본 트랜잭션 데이터가 포함되어 있지 않아 상세 분포 차트는 제공되지 않습니다. 대신 통계적으로 요약된 데이터를 사용하여 대시보드의 모든 기능을 활용하실 수 있습니다.")
+        return
+
+    metric_defs = [
+        ("가격(전세)", "price"),
+        ("표준화 월세", "monthly_price"),
+        ("통근", "commute"),
+        ("인프라", "infra"),
+        ("치안(범죄건수)", "safety"),
+        ("전세가율", "risk"),
+    ]
 
     with st.container(border=True):
         st.markdown("#### 사용자 정보 입력")
@@ -1093,7 +1102,10 @@ def _render_eda_tab(
 
     chart_cols = st.columns(2)
     for idx, (label, metric_key) in enumerate(metric_defs):
-        series = pd.to_numeric(raw_eda_series.get(metric_key), errors="coerce").dropna()
+        val = raw_eda_series.get(metric_key)
+        if val is None:
+            continue
+        series = pd.Series(pd.to_numeric(val, errors="coerce")).dropna()
         if series.empty:
             continue
         
