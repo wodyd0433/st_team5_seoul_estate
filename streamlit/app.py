@@ -572,6 +572,16 @@ def _compute_outputs(bundle: dict[str, object], ui: dict[str, object]) -> dict[s
 
 
 def _build_raw_eda_inputs(bundle: dict[str, object], ui: dict[str, object]) -> tuple[dict[str, pd.Series], dict[str, dict[str, float]]]:
+    if bundle.get("is_compact"):
+        # 경량 모드일 경우 원본 트랜잭션 데이터가 없으므로 빈 데이터와 기본 임계값 반환
+        return {}, {
+            "price": {"mean": 0, "std": 1},
+            "commute": {"mean": 0, "std": 1},
+            "infra": {"mean": 0, "std": 1},
+            "safety": {"mean": 0, "std": 1},
+            "risk": {"mean": 0, "std": 1},
+        }
+
     rent = bundle["rent"].copy()
     sale = bundle["sale"].copy()
     crime = bundle["crime"].copy()
